@@ -10,6 +10,7 @@ import { Toaster } from 'react-hot-toast';
 import { HomePage } from './pages/HomePage';
 import { StatsPage } from './pages/StatsPage';
 import { OrdersPage } from './pages/OrdersPage';
+import LogsPage from './pages/LogsPage'; // 导入新的日志页面组件
 import { LoginPage } from './components/LoginPage';
 import { Navigation } from './components/Navigation';
 import { ProtectedRoute } from './components/ProtectedRoute';
@@ -31,6 +32,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <OrdersPage />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/system-logs" 
+            element={
+              <ProtectedRoute>
+                <LogsPage />
               </ProtectedRoute>
             } 
           />

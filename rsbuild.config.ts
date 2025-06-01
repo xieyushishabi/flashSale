@@ -12,5 +12,13 @@ import { defineConfig } from "@rsbuild/core";
           'process.env.RSBUILD_APP_API_URL': JSON.stringify(process.env.RSBUILD_APP_API_URL)
         }
       },
-    });
+      server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
+    },
+  },
+});
       

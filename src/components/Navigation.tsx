@@ -6,7 +6,7 @@
 
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Home, BarChart3, ShoppingBag, User, LogOut, LogIn, Zap } from 'lucide-react';
+import { Home, BarChart3, ShoppingBag, User, LogOut, LogIn, Zap, ListChecks } from 'lucide-react'; // Added ListChecks
 import { useAuth } from '../hooks/useAuth';
 
 export function Navigation() {
@@ -39,13 +39,22 @@ export function Navigation() {
             </Link>
 
             {isAuthenticated && (
-              <Link
-                to="/orders"
-                className="flex items-center space-x-1 px-3 py-2 rounded-lg text-gray-700 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-              >
-                <ShoppingBag className="w-4 h-4" />
-                <span>我的订单</span>
-              </Link>
+              <>
+                <Link
+                  to="/system-logs"
+                  className="flex items-center space-x-1 px-3 py-2 rounded-lg text-gray-700 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                >
+                  <ListChecks className="w-4 h-4" /> 
+                  <span>系统日志</span>
+                </Link>
+                <Link
+                  to="/orders"
+                  className="flex items-center space-x-1 px-3 py-2 rounded-lg text-gray-700 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                >
+                  <ShoppingBag className="w-4 h-4" />
+                  <span>我的订单</span>
+                </Link>
+              </>
             )}
 
             {isAuthenticated ? (

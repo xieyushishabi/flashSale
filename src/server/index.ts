@@ -10,8 +10,12 @@ import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
+import { HTTPException } from 'hono/http-exception';
+import fs from 'fs/promises'; // 用于异步文件操作
+import path from 'path'; // 用于处理文件路径
 // import { csrf } from 'hono/csrf'; // 根据需要启用和配置
 import { jwt } from 'hono/jwt'; // 根据需要启用和配置
+import { authenticateToken } from './middleware/auth'; // For custom JWT authentication
 
 console.log('[ProcessDiag] Script execution started. Registering basic exit handler.');
 process.on('exit', (code) => {
@@ -30,7 +34,7 @@ import authRoutes from './routes/auth';
 import productsRoutes from './routes/products';
 import seckillRoutes from './routes/seckill';
 import healthRoutes from './routes/health'; // Import health check routes
-// import { orderRoutes } from './routes/orders'; // 假设这些存在或将被添加
+import { orderRoutes } from './routes/orders'; // 假设这些存在或将被添加
 // import { paymentRoutes } from './routes/payment';
 // import { userRoutes } from './routes/users';
 // import { cartRoutes } from './routes/cart';
@@ -86,19 +90,149 @@ async function main() {
     }));
     app.use('*', secureHeaders());
     // app.use('*', csrf()); // 如果需要，启用并配置
-    // JWT 中间件 (示例, 保护 /api/secure/* 路由)
-    if (config.JWT_SECRET && config.JWT_SECRET !== 'YOUR_DEFAULT_JWT_SECRET_REPLACE_ME') {
-      app.use('/api/secure/*', jwt({ secret: config.JWT_SECRET }));
-      appLogger.info('[Main] JWT middleware configured for /api/secure/*');
-    } else {
-      appLogger.warn('[Main] JWT_SECRET is not set or is the default placeholder. JWT protected routes will not be secure. Please set a strong JWT_SECRET in your .env.development file.');
-    }
+    // JWT middleware for /api/secure/* is handled by the secureRoutes instance
 
     // --- 路由注册 ---
     appLogger.info('[Main] Registering API routes...');
     app.route('/api/auth', authRoutes);
     app.route('/api/products', productsRoutes);
-    app.route('/api/seckill', seckillRoutes);
+  app.route('/api/seckill', seckillRoutes);
+
+    // 安全路由组，需要JWT认证
+    const secureRoutes = new Hono();
+    secureRoutes.use('*', authenticateToken); // 应用自定义JWT中间件到所有 /api/secure/* 路由
+
+    // Error handler for secure routes to ensure JSON responses for JWT errors
+    secureRoutes.onError((err, c) => {
+      appLogger.error('[Secure Routes Error] Error occurred:', err.message);
+      if (err instanceof HTTPException && err.status === 401) {
+        return c.json({ error: 'Authentication failed', message: err.message }, 401);
+      }
+      // For other errors within secure routes, you might want a generic JSON error response
+      return c.json({ error: 'An unexpected error occurred', message: err.message }, (err instanceof HTTPException ? err.status : 500));
+    });
+
+    // 新增：获取应用日志的API接口
+    secureRoutes.get('/ping', (c) => {
+      appLogger.info('[Secure Routes Test] GET /api/secure/ping reached');
+      return c.json({ success: true, message: 'pong from /api/secure/ping', userId: c.get('jwtPayload')?.userId });
+    });
+
+    secureRoutes.get('/logs', async (c) => {
+      const page = parseInt(c.req.query('page') || '1', 10);
+      const limit = parseInt(c.req.query('limit') || '50', 10);
+      const logFilePath = path.join(process.cwd(), 'logs', 'app.log');
+
+      try {
+        const fileContent = await fs.readFile(logFilePath, 'utf-8');
+        const lines = fileContent.split('\n').filter(line => line.trim() !== ''); // 按行分割并移除空行
+        
+        const parsedLogs: any[] = [];
+        let lastKnownTimestamp: string | null = null; 
+
+        for (const line of lines) {
+          try {
+            const logEntry = JSON.parse(line);
+            parsedLogs.push({
+              timestamp: logEntry.timestamp || new Date().toISOString(),
+              level: logEntry.level || 'INFO',
+              category: logEntry.category || 'default',
+              message: logEntry.message || line, 
+              hostname: logEntry.hostname,
+              pid: logEntry.pid,
+              stack: logEntry.stack,
+              isJson: true 
+            });
+            if (logEntry.timestamp) {
+              lastKnownTimestamp = logEntry.timestamp;
+            }
+          } catch (parseError) {
+            appLogger.warn(`[LogsAPI] Failed to parse log line as JSON: "${line.substring(0, 100)}..." Attempting fallback.`);
+            
+            // Updated regex to match format: [TIMESTAMP_ISO_Z] [LEVEL] [CATEGORY] [Host: HOSTNAME] [PID: PID_NUMBER] MESSAGE
+            const textLogRegex = /^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z)\]\s+\[([A-Z]+)\]\s+\[([\w.-]+)\]\s+\[Host:\s*([^\s\]]+)\]\s+\[PID:\s*(\d+)\]\s*(.*)$/;
+            const match = line.match(textLogRegex);
+
+            if (match) {
+              parsedLogs.push({
+                timestamp: match[1],
+                level: match[2].toUpperCase(),
+                category: match[3],
+                hostname: match[4], // Captured Hostname
+                pid: match[5],      // Captured PID
+                message: match[6].trim(), // Rest of the line as message
+                isJson: false,
+                isPatternMatched: true,
+                patternSource: 'complex'
+              });
+              if (match[1]) {
+                lastKnownTimestamp = match[1];
+              }
+            } else {
+              // Fallback to a simpler text log regex if the complex one fails
+              const simpleTextLogRegex = /^(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{3})\s+\[([A-Z]+)\]\s+([\w.-]+)\s+-\s+(.*)$/;
+              const simpleMatch = line.match(simpleTextLogRegex);
+              if (simpleMatch) {
+                parsedLogs.push({
+                  timestamp: simpleMatch[1],
+                  level: simpleMatch[2].toUpperCase(),
+                  category: simpleMatch[3],
+                  message: simpleMatch[4].trim(),
+                  isJson: false,
+                  isPatternMatched: true,
+                  patternSource: 'simple'
+                });
+                if (simpleMatch[1]) {
+                  lastKnownTimestamp = simpleMatch[1];
+                }
+              } else {
+              parsedLogs.push({
+                timestamp: lastKnownTimestamp || new Date().toISOString(),
+                level: 'RAW',
+                category: 'unknown',
+                message: line,
+                isJson: false,
+                isPatternMatched: false,
+                patternSource: 'none'
+              });
+            }
+          } // Closes 'else' block from line 187
+        } // Closes 'catch (parseError)' block from line 148
+        } // Closes 'for (const line of lines)' loop from line 132
+
+        // 最新的日志在文件末尾，所以反转数组使最新的日志在前面
+        const reversedLogs = parsedLogs.reverse();
+
+        const totalItems = reversedLogs.length;
+        const totalPages = Math.ceil(totalItems / limit);
+        const startIndex = (page - 1) * limit;
+        const paginatedLogs = reversedLogs.slice(startIndex, startIndex + limit);
+
+        return c.json({
+          logs: paginatedLogs,
+          currentPage: page,
+          totalPages,
+          totalItems,
+          limit,
+        });
+
+      } catch (error: any) {
+        if (error.code === 'ENOENT') {
+          appLogger.error('[LogsAPI] Log file not found:', logFilePath);
+          return c.json({ logs: [], currentPage: page, totalPages: 0, totalItems: 0, limit, message: 'Log file not found.' }, 404);
+        }
+        appLogger.error('[LogsAPI] Error reading log file:', error);
+        return c.json({ logs: [], currentPage: page, totalPages: 0, totalItems: 0, limit, message: 'Error reading or processing log file.' }, 500);
+      }
+    });
+
+    // 在新的 secureRoutes 实例中集成 seckill 和 orders 路由
+    secureRoutes.route('/seckill', seckillRoutes);
+    secureRoutes.route('/orders', orderRoutes); // Assuming orderRoutes is defined and needs protection
+
+    // 将安全路由组应用到主应用实例
+    app.route('/api/secure', secureRoutes);
+    // app.route('/api/seckill', seckillRoutes); // Now handled by secureRoutes
     app.route('/api/health', healthRoutes); // Register health check route
     // app.route('/api/orders', orderRoutes);
     // app.route('/api/payment', paymentRoutes);
