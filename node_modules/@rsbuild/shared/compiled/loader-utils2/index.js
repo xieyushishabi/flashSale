@@ -1,0 +1,5053 @@
+/******/ (() => { // webpackBootstrap
+/******/ 	var __webpack_modules__ = ({
+
+/***/ 620:
+/***/ (function(module) {
+
+/*
+ *  big.js v5.2.2
+ *  A small, fast, easy-to-use library for arbitrary-precision decimal arithmetic.
+ *  Copyright (c) 2018 Michael Mclaughlin <M8ch88l@gmail.com>
+ *  https://github.com/MikeMcl/big.js/LICENCE
+ */
+;(function (GLOBAL) {
+  'use strict';
+  var Big,
+
+
+/************************************** EDITABLE DEFAULTS *****************************************/
+
+
+    // The default values below must be integers within the stated ranges.
+
+    /*
+     * The maximum number of decimal places (DP) of the results of operations involving division:
+     * div and sqrt, and pow with negative exponents.
+     */
+    DP = 20,          // 0 to MAX_DP
+
+    /*
+     * The rounding mode (RM) used when rounding to the above decimal places.
+     *
+     *  0  Towards zero (i.e. truncate, no rounding).       (ROUND_DOWN)
+     *  1  To nearest neighbour. If equidistant, round up.  (ROUND_HALF_UP)
+     *  2  To nearest neighbour. If equidistant, to even.   (ROUND_HALF_EVEN)
+     *  3  Away from zero.                                  (ROUND_UP)
+     */
+    RM = 1,             // 0, 1, 2 or 3
+
+    // The maximum value of DP and Big.DP.
+    MAX_DP = 1E6,       // 0 to 1000000
+
+    // The maximum magnitude of the exponent argument to the pow method.
+    MAX_POWER = 1E6,    // 1 to 1000000
+
+    /*
+     * The negative exponent (NE) at and beneath which toString returns exponential notation.
+     * (JavaScript numbers: -7)
+     * -1000000 is the minimum recommended exponent value of a Big.
+     */
+    NE = -7,            // 0 to -1000000
+
+    /*
+     * The positive exponent (PE) at and above which toString returns exponential notation.
+     * (JavaScript numbers: 21)
+     * 1000000 is the maximum recommended exponent value of a Big.
+     * (This limit is not enforced or checked.)
+     */
+    PE = 21,            // 0 to 1000000
+
+
+/**************************************************************************************************/
+
+
+    // Error messages.
+    NAME = '[big.js] ',
+    INVALID = NAME + 'Invalid ',
+    INVALID_DP = INVALID + 'decimal places',
+    INVALID_RM = INVALID + 'rounding mode',
+    DIV_BY_ZERO = NAME + 'Division by zero',
+
+    // The shared prototype object.
+    P = {},
+    UNDEFINED = void 0,
+    NUMERIC = /^-?(\d+(\.\d*)?|\.\d+)(e[+-]?\d+)?$/i;
+
+
+  /*
+   * Create and return a Big constructor.
+   *
+   */
+  function _Big_() {
+
+    /*
+     * The Big constructor and exported function.
+     * Create and return a new instance of a Big number object.
+     *
+     * n {number|string|Big} A numeric value.
+     */
+    function Big(n) {
+      var x = this;
+
+      // Enable constructor usage without new.
+      if (!(x instanceof Big)) return n === UNDEFINED ? _Big_() : new Big(n);
+
+      // Duplicate.
+      if (n instanceof Big) {
+        x.s = n.s;
+        x.e = n.e;
+        x.c = n.c.slice();
+      } else {
+        parse(x, n);
+      }
+
+      /*
+       * Retain a reference to this Big constructor, and shadow Big.prototype.constructor which
+       * points to Object.
+       */
+      x.constructor = Big;
+    }
+
+    Big.prototype = P;
+    Big.DP = DP;
+    Big.RM = RM;
+    Big.NE = NE;
+    Big.PE = PE;
+    Big.version = '5.2.2';
+
+    return Big;
+  }
+
+
+  /*
+   * Parse the number or string value passed to a Big constructor.
+   *
+   * x {Big} A Big number instance.
+   * n {number|string} A numeric value.
+   */
+  function parse(x, n) {
+    var e, i, nl;
+
+    // Minus zero?
+    if (n === 0 && 1 / n < 0) n = '-0';
+    else if (!NUMERIC.test(n += '')) throw Error(INVALID + 'number');
+
+    // Determine sign.
+    x.s = n.charAt(0) == '-' ? (n = n.slice(1), -1) : 1;
+
+    // Decimal point?
+    if ((e = n.indexOf('.')) > -1) n = n.replace('.', '');
+
+    // Exponential form?
+    if ((i = n.search(/e/i)) > 0) {
+
+      // Determine exponent.
+      if (e < 0) e = i;
+      e += +n.slice(i + 1);
+      n = n.substring(0, i);
+    } else if (e < 0) {
+
+      // Integer.
+      e = n.length;
+    }
+
+    nl = n.length;
+
+    // Determine leading zeros.
+    for (i = 0; i < nl && n.charAt(i) == '0';) ++i;
+
+    if (i == nl) {
+
+      // Zero.
+      x.c = [x.e = 0];
+    } else {
+
+      // Determine trailing zeros.
+      for (; nl > 0 && n.charAt(--nl) == '0';);
+      x.e = e - i - 1;
+      x.c = [];
+
+      // Convert string to array of digits without leading/trailing zeros.
+      for (e = 0; i <= nl;) x.c[e++] = +n.charAt(i++);
+    }
+
+    return x;
+  }
+
+
+  /*
+   * Round Big x to a maximum of dp decimal places using rounding mode rm.
+   * Called by stringify, P.div, P.round and P.sqrt.
+   *
+   * x {Big} The Big to round.
+   * dp {number} Integer, 0 to MAX_DP inclusive.
+   * rm {number} 0, 1, 2 or 3 (DOWN, HALF_UP, HALF_EVEN, UP)
+   * [more] {boolean} Whether the result of division was truncated.
+   */
+  function round(x, dp, rm, more) {
+    var xc = x.c,
+      i = x.e + dp + 1;
+
+    if (i < xc.length) {
+      if (rm === 1) {
+
+        // xc[i] is the digit after the digit that may be rounded up.
+        more = xc[i] >= 5;
+      } else if (rm === 2) {
+        more = xc[i] > 5 || xc[i] == 5 &&
+          (more || i < 0 || xc[i + 1] !== UNDEFINED || xc[i - 1] & 1);
+      } else if (rm === 3) {
+        more = more || !!xc[0];
+      } else {
+        more = false;
+        if (rm !== 0) throw Error(INVALID_RM);
+      }
+
+      if (i < 1) {
+        xc.length = 1;
+
+        if (more) {
+
+          // 1, 0.1, 0.01, 0.001, 0.0001 etc.
+          x.e = -dp;
+          xc[0] = 1;
+        } else {
+
+          // Zero.
+          xc[0] = x.e = 0;
+        }
+      } else {
+
+        // Remove any digits after the required decimal places.
+        xc.length = i--;
+
+        // Round up?
+        if (more) {
+
+          // Rounding up may mean the previous digit has to be rounded up.
+          for (; ++xc[i] > 9;) {
+            xc[i] = 0;
+            if (!i--) {
+              ++x.e;
+              xc.unshift(1);
+            }
+          }
+        }
+
+        // Remove trailing zeros.
+        for (i = xc.length; !xc[--i];) xc.pop();
+      }
+    } else if (rm < 0 || rm > 3 || rm !== ~~rm) {
+      throw Error(INVALID_RM);
+    }
+
+    return x;
+  }
+
+
+  /*
+   * Return a string representing the value of Big x in normal or exponential notation.
+   * Handles P.toExponential, P.toFixed, P.toJSON, P.toPrecision, P.toString and P.valueOf.
+   *
+   * x {Big}
+   * id? {number} Caller id.
+   *         1 toExponential
+   *         2 toFixed
+   *         3 toPrecision
+   *         4 valueOf
+   * n? {number|undefined} Caller's argument.
+   * k? {number|undefined}
+   */
+  function stringify(x, id, n, k) {
+    var e, s,
+      Big = x.constructor,
+      z = !x.c[0];
+
+    if (n !== UNDEFINED) {
+      if (n !== ~~n || n < (id == 3) || n > MAX_DP) {
+        throw Error(id == 3 ? INVALID + 'precision' : INVALID_DP);
+      }
+
+      x = new Big(x);
+
+      // The index of the digit that may be rounded up.
+      n = k - x.e;
+
+      // Round?
+      if (x.c.length > ++k) round(x, n, Big.RM);
+
+      // toFixed: recalculate k as x.e may have changed if value rounded up.
+      if (id == 2) k = x.e + n + 1;
+
+      // Append zeros?
+      for (; x.c.length < k;) x.c.push(0);
+    }
+
+    e = x.e;
+    s = x.c.join('');
+    n = s.length;
+
+    // Exponential notation?
+    if (id != 2 && (id == 1 || id == 3 && k <= e || e <= Big.NE || e >= Big.PE)) {
+      s = s.charAt(0) + (n > 1 ? '.' + s.slice(1) : '') + (e < 0 ? 'e' : 'e+') + e;
+
+    // Normal notation.
+    } else if (e < 0) {
+      for (; ++e;) s = '0' + s;
+      s = '0.' + s;
+    } else if (e > 0) {
+      if (++e > n) for (e -= n; e--;) s += '0';
+      else if (e < n) s = s.slice(0, e) + '.' + s.slice(e);
+    } else if (n > 1) {
+      s = s.charAt(0) + '.' + s.slice(1);
+    }
+
+    return x.s < 0 && (!z || id == 4) ? '-' + s : s;
+  }
+
+
+  // Prototype/instance methods
+
+
+  /*
+   * Return a new Big whose value is the absolute value of this Big.
+   */
+  P.abs = function () {
+    var x = new this.constructor(this);
+    x.s = 1;
+    return x;
+  };
+
+
+  /*
+   * Return 1 if the value of this Big is greater than the value of Big y,
+   *       -1 if the value of this Big is less than the value of Big y, or
+   *        0 if they have the same value.
+  */
+  P.cmp = function (y) {
+    var isneg,
+      x = this,
+      xc = x.c,
+      yc = (y = new x.constructor(y)).c,
+      i = x.s,
+      j = y.s,
+      k = x.e,
+      l = y.e;
+
+    // Either zero?
+    if (!xc[0] || !yc[0]) return !xc[0] ? !yc[0] ? 0 : -j : i;
+
+    // Signs differ?
+    if (i != j) return i;
+
+    isneg = i < 0;
+
+    // Compare exponents.
+    if (k != l) return k > l ^ isneg ? 1 : -1;
+
+    j = (k = xc.length) < (l = yc.length) ? k : l;
+
+    // Compare digit by digit.
+    for (i = -1; ++i < j;) {
+      if (xc[i] != yc[i]) return xc[i] > yc[i] ^ isneg ? 1 : -1;
+    }
+
+    // Compare lengths.
+    return k == l ? 0 : k > l ^ isneg ? 1 : -1;
+  };
+
+
+  /*
+   * Return a new Big whose value is the value of this Big divided by the value of Big y, rounded,
+   * if necessary, to a maximum of Big.DP decimal places using rounding mode Big.RM.
+   */
+  P.div = function (y) {
+    var x = this,
+      Big = x.constructor,
+      a = x.c,                  // dividend
+      b = (y = new Big(y)).c,   // divisor
+      k = x.s == y.s ? 1 : -1,
+      dp = Big.DP;
+
+    if (dp !== ~~dp || dp < 0 || dp > MAX_DP) throw Error(INVALID_DP);
+
+    // Divisor is zero?
+    if (!b[0]) throw Error(DIV_BY_ZERO);
+
+    // Dividend is 0? Return +-0.
+    if (!a[0]) return new Big(k * 0);
+
+    var bl, bt, n, cmp, ri,
+      bz = b.slice(),
+      ai = bl = b.length,
+      al = a.length,
+      r = a.slice(0, bl),   // remainder
+      rl = r.length,
+      q = y,                // quotient
+      qc = q.c = [],
+      qi = 0,
+      d = dp + (q.e = x.e - y.e) + 1;    // number of digits of the result
+
+    q.s = k;
+    k = d < 0 ? 0 : d;
+
+    // Create version of divisor with leading zero.
+    bz.unshift(0);
+
+    // Add zeros to make remainder as long as divisor.
+    for (; rl++ < bl;) r.push(0);
+
+    do {
+
+      // n is how many times the divisor goes into current remainder.
+      for (n = 0; n < 10; n++) {
+
+        // Compare divisor and remainder.
+        if (bl != (rl = r.length)) {
+          cmp = bl > rl ? 1 : -1;
+        } else {
+          for (ri = -1, cmp = 0; ++ri < bl;) {
+            if (b[ri] != r[ri]) {
+              cmp = b[ri] > r[ri] ? 1 : -1;
+              break;
+            }
+          }
+        }
+
+        // If divisor < remainder, subtract divisor from remainder.
+        if (cmp < 0) {
+
+          // Remainder can't be more than 1 digit longer than divisor.
+          // Equalise lengths using divisor with extra leading zero?
+          for (bt = rl == bl ? b : bz; rl;) {
+            if (r[--rl] < bt[rl]) {
+              ri = rl;
+              for (; ri && !r[--ri];) r[ri] = 9;
+              --r[ri];
+              r[rl] += 10;
+            }
+            r[rl] -= bt[rl];
+          }
+
+          for (; !r[0];) r.shift();
+        } else {
+          break;
+        }
+      }
+
+      // Add the digit n to the result array.
+      qc[qi++] = cmp ? n : ++n;
+
+      // Update the remainder.
+      if (r[0] && cmp) r[rl] = a[ai] || 0;
+      else r = [a[ai]];
+
+    } while ((ai++ < al || r[0] !== UNDEFINED) && k--);
+
+    // Leading zero? Do not remove if result is simply zero (qi == 1).
+    if (!qc[0] && qi != 1) {
+
+      // There can't be more than one zero.
+      qc.shift();
+      q.e--;
+    }
+
+    // Round?
+    if (qi > d) round(q, dp, Big.RM, r[0] !== UNDEFINED);
+
+    return q;
+  };
+
+
+  /*
+   * Return true if the value of this Big is equal to the value of Big y, otherwise return false.
+   */
+  P.eq = function (y) {
+    return !this.cmp(y);
+  };
+
+
+  /*
+   * Return true if the value of this Big is greater than the value of Big y, otherwise return
+   * false.
+   */
+  P.gt = function (y) {
+    return this.cmp(y) > 0;
+  };
+
+
+  /*
+   * Return true if the value of this Big is greater than or equal to the value of Big y, otherwise
+   * return false.
+   */
+  P.gte = function (y) {
+    return this.cmp(y) > -1;
+  };
+
+
+  /*
+   * Return true if the value of this Big is less than the value of Big y, otherwise return false.
+   */
+  P.lt = function (y) {
+    return this.cmp(y) < 0;
+  };
+
+
+  /*
+   * Return true if the value of this Big is less than or equal to the value of Big y, otherwise
+   * return false.
+   */
+  P.lte = function (y) {
+    return this.cmp(y) < 1;
+  };
+
+
+  /*
+   * Return a new Big whose value is the value of this Big minus the value of Big y.
+   */
+  P.minus = P.sub = function (y) {
+    var i, j, t, xlty,
+      x = this,
+      Big = x.constructor,
+      a = x.s,
+      b = (y = new Big(y)).s;
+
+    // Signs differ?
+    if (a != b) {
+      y.s = -b;
+      return x.plus(y);
+    }
+
+    var xc = x.c.slice(),
+      xe = x.e,
+      yc = y.c,
+      ye = y.e;
+
+    // Either zero?
+    if (!xc[0] || !yc[0]) {
+
+      // y is non-zero? x is non-zero? Or both are zero.
+      return yc[0] ? (y.s = -b, y) : new Big(xc[0] ? x : 0);
+    }
+
+    // Determine which is the bigger number. Prepend zeros to equalise exponents.
+    if (a = xe - ye) {
+
+      if (xlty = a < 0) {
+        a = -a;
+        t = xc;
+      } else {
+        ye = xe;
+        t = yc;
+      }
+
+      t.reverse();
+      for (b = a; b--;) t.push(0);
+      t.reverse();
+    } else {
+
+      // Exponents equal. Check digit by digit.
+      j = ((xlty = xc.length < yc.length) ? xc : yc).length;
+
+      for (a = b = 0; b < j; b++) {
+        if (xc[b] != yc[b]) {
+          xlty = xc[b] < yc[b];
+          break;
+        }
+      }
+    }
+
+    // x < y? Point xc to the array of the bigger number.
+    if (xlty) {
+      t = xc;
+      xc = yc;
+      yc = t;
+      y.s = -y.s;
+    }
+
+    /*
+     * Append zeros to xc if shorter. No need to add zeros to yc if shorter as subtraction only
+     * needs to start at yc.length.
+     */
+    if ((b = (j = yc.length) - (i = xc.length)) > 0) for (; b--;) xc[i++] = 0;
+
+    // Subtract yc from xc.
+    for (b = i; j > a;) {
+      if (xc[--j] < yc[j]) {
+        for (i = j; i && !xc[--i];) xc[i] = 9;
+        --xc[i];
+        xc[j] += 10;
+      }
+
+      xc[j] -= yc[j];
+    }
+
+    // Remove trailing zeros.
+    for (; xc[--b] === 0;) xc.pop();
+
+    // Remove leading zeros and adjust exponent accordingly.
+    for (; xc[0] === 0;) {
+      xc.shift();
+      --ye;
+    }
+
+    if (!xc[0]) {
+
+      // n - n = +0
+      y.s = 1;
+
+      // Result must be zero.
+      xc = [ye = 0];
+    }
+
+    y.c = xc;
+    y.e = ye;
+
+    return y;
+  };
+
+
+  /*
+   * Return a new Big whose value is the value of this Big modulo the value of Big y.
+   */
+  P.mod = function (y) {
+    var ygtx,
+      x = this,
+      Big = x.constructor,
+      a = x.s,
+      b = (y = new Big(y)).s;
+
+    if (!y.c[0]) throw Error(DIV_BY_ZERO);
+
+    x.s = y.s = 1;
+    ygtx = y.cmp(x) == 1;
+    x.s = a;
+    y.s = b;
+
+    if (ygtx) return new Big(x);
+
+    a = Big.DP;
+    b = Big.RM;
+    Big.DP = Big.RM = 0;
+    x = x.div(y);
+    Big.DP = a;
+    Big.RM = b;
+
+    return this.minus(x.times(y));
+  };
+
+
+  /*
+   * Return a new Big whose value is the value of this Big plus the value of Big y.
+   */
+  P.plus = P.add = function (y) {
+    var t,
+      x = this,
+      Big = x.constructor,
+      a = x.s,
+      b = (y = new Big(y)).s;
+
+    // Signs differ?
+    if (a != b) {
+      y.s = -b;
+      return x.minus(y);
+    }
+
+    var xe = x.e,
+      xc = x.c,
+      ye = y.e,
+      yc = y.c;
+
+    // Either zero? y is non-zero? x is non-zero? Or both are zero.
+    if (!xc[0] || !yc[0]) return yc[0] ? y : new Big(xc[0] ? x : a * 0);
+
+    xc = xc.slice();
+
+    // Prepend zeros to equalise exponents.
+    // Note: reverse faster than unshifts.
+    if (a = xe - ye) {
+      if (a > 0) {
+        ye = xe;
+        t = yc;
+      } else {
+        a = -a;
+        t = xc;
+      }
+
+      t.reverse();
+      for (; a--;) t.push(0);
+      t.reverse();
+    }
+
+    // Point xc to the longer array.
+    if (xc.length - yc.length < 0) {
+      t = yc;
+      yc = xc;
+      xc = t;
+    }
+
+    a = yc.length;
+
+    // Only start adding at yc.length - 1 as the further digits of xc can be left as they are.
+    for (b = 0; a; xc[a] %= 10) b = (xc[--a] = xc[a] + yc[a] + b) / 10 | 0;
+
+    // No need to check for zero, as +x + +y != 0 && -x + -y != 0
+
+    if (b) {
+      xc.unshift(b);
+      ++ye;
+    }
+
+    // Remove trailing zeros.
+    for (a = xc.length; xc[--a] === 0;) xc.pop();
+
+    y.c = xc;
+    y.e = ye;
+
+    return y;
+  };
+
+
+  /*
+   * Return a Big whose value is the value of this Big raised to the power n.
+   * If n is negative, round to a maximum of Big.DP decimal places using rounding
+   * mode Big.RM.
+   *
+   * n {number} Integer, -MAX_POWER to MAX_POWER inclusive.
+   */
+  P.pow = function (n) {
+    var x = this,
+      one = new x.constructor(1),
+      y = one,
+      isneg = n < 0;
+
+    if (n !== ~~n || n < -MAX_POWER || n > MAX_POWER) throw Error(INVALID + 'exponent');
+    if (isneg) n = -n;
+
+    for (;;) {
+      if (n & 1) y = y.times(x);
+      n >>= 1;
+      if (!n) break;
+      x = x.times(x);
+    }
+
+    return isneg ? one.div(y) : y;
+  };
+
+
+  /*
+   * Return a new Big whose value is the value of this Big rounded using rounding mode rm
+   * to a maximum of dp decimal places, or, if dp is negative, to an integer which is a
+   * multiple of 10**-dp.
+   * If dp is not specified, round to 0 decimal places.
+   * If rm is not specified, use Big.RM.
+   *
+   * dp? {number} Integer, -MAX_DP to MAX_DP inclusive.
+   * rm? 0, 1, 2 or 3 (ROUND_DOWN, ROUND_HALF_UP, ROUND_HALF_EVEN, ROUND_UP)
+   */
+  P.round = function (dp, rm) {
+    var Big = this.constructor;
+    if (dp === UNDEFINED) dp = 0;
+    else if (dp !== ~~dp || dp < -MAX_DP || dp > MAX_DP) throw Error(INVALID_DP);
+    return round(new Big(this), dp, rm === UNDEFINED ? Big.RM : rm);
+  };
+
+
+  /*
+   * Return a new Big whose value is the square root of the value of this Big, rounded, if
+   * necessary, to a maximum of Big.DP decimal places using rounding mode Big.RM.
+   */
+  P.sqrt = function () {
+    var r, c, t,
+      x = this,
+      Big = x.constructor,
+      s = x.s,
+      e = x.e,
+      half = new Big(0.5);
+
+    // Zero?
+    if (!x.c[0]) return new Big(x);
+
+    // Negative?
+    if (s < 0) throw Error(NAME + 'No square root');
+
+    // Estimate.
+    s = Math.sqrt(x + '');
+
+    // Math.sqrt underflow/overflow?
+    // Re-estimate: pass x coefficient to Math.sqrt as integer, then adjust the result exponent.
+    if (s === 0 || s === 1 / 0) {
+      c = x.c.join('');
+      if (!(c.length + e & 1)) c += '0';
+      s = Math.sqrt(c);
+      e = ((e + 1) / 2 | 0) - (e < 0 || e & 1);
+      r = new Big((s == 1 / 0 ? '1e' : (s = s.toExponential()).slice(0, s.indexOf('e') + 1)) + e);
+    } else {
+      r = new Big(s);
+    }
+
+    e = r.e + (Big.DP += 4);
+
+    // Newton-Raphson iteration.
+    do {
+      t = r;
+      r = half.times(t.plus(x.div(t)));
+    } while (t.c.slice(0, e).join('') !== r.c.slice(0, e).join(''));
+
+    return round(r, Big.DP -= 4, Big.RM);
+  };
+
+
+  /*
+   * Return a new Big whose value is the value of this Big times the value of Big y.
+   */
+  P.times = P.mul = function (y) {
+    var c,
+      x = this,
+      Big = x.constructor,
+      xc = x.c,
+      yc = (y = new Big(y)).c,
+      a = xc.length,
+      b = yc.length,
+      i = x.e,
+      j = y.e;
+
+    // Determine sign of result.
+    y.s = x.s == y.s ? 1 : -1;
+
+    // Return signed 0 if either 0.
+    if (!xc[0] || !yc[0]) return new Big(y.s * 0);
+
+    // Initialise exponent of result as x.e + y.e.
+    y.e = i + j;
+
+    // If array xc has fewer digits than yc, swap xc and yc, and lengths.
+    if (a < b) {
+      c = xc;
+      xc = yc;
+      yc = c;
+      j = a;
+      a = b;
+      b = j;
+    }
+
+    // Initialise coefficient array of result with zeros.
+    for (c = new Array(j = a + b); j--;) c[j] = 0;
+
+    // Multiply.
+
+    // i is initially xc.length.
+    for (i = b; i--;) {
+      b = 0;
+
+      // a is yc.length.
+      for (j = a + i; j > i;) {
+
+        // Current sum of products at this digit position, plus carry.
+        b = c[j] + yc[i] * xc[j - i - 1] + b;
+        c[j--] = b % 10;
+
+        // carry
+        b = b / 10 | 0;
+      }
+
+      c[j] = (c[j] + b) % 10;
+    }
+
+    // Increment result exponent if there is a final carry, otherwise remove leading zero.
+    if (b) ++y.e;
+    else c.shift();
+
+    // Remove trailing zeros.
+    for (i = c.length; !c[--i];) c.pop();
+    y.c = c;
+
+    return y;
+  };
+
+
+  /*
+   * Return a string representing the value of this Big in exponential notation to dp fixed decimal
+   * places and rounded using Big.RM.
+   *
+   * dp? {number} Integer, 0 to MAX_DP inclusive.
+   */
+  P.toExponential = function (dp) {
+    return stringify(this, 1, dp, dp);
+  };
+
+
+  /*
+   * Return a string representing the value of this Big in normal notation to dp fixed decimal
+   * places and rounded using Big.RM.
+   *
+   * dp? {number} Integer, 0 to MAX_DP inclusive.
+   *
+   * (-0).toFixed(0) is '0', but (-0.1).toFixed(0) is '-0'.
+   * (-0).toFixed(1) is '0.0', but (-0.01).toFixed(1) is '-0.0'.
+   */
+  P.toFixed = function (dp) {
+    return stringify(this, 2, dp, this.e + dp);
+  };
+
+
+  /*
+   * Return a string representing the value of this Big rounded to sd significant digits using
+   * Big.RM. Use exponential notation if sd is less than the number of digits necessary to represent
+   * the integer part of the value in normal notation.
+   *
+   * sd {number} Integer, 1 to MAX_DP inclusive.
+   */
+  P.toPrecision = function (sd) {
+    return stringify(this, 3, sd, sd - 1);
+  };
+
+
+  /*
+   * Return a string representing the value of this Big.
+   * Return exponential notation if this Big has a positive exponent equal to or greater than
+   * Big.PE, or a negative exponent equal to or less than Big.NE.
+   * Omit the sign for negative zero.
+   */
+  P.toString = function () {
+    return stringify(this);
+  };
+
+
+  /*
+   * Return a string representing the value of this Big.
+   * Return exponential notation if this Big has a positive exponent equal to or greater than
+   * Big.PE, or a negative exponent equal to or less than Big.NE.
+   * Include the sign for negative zero.
+   */
+  P.valueOf = P.toJSON = function () {
+    return stringify(this, 4);
+  };
+
+
+  // Export
+
+
+  Big = _Big_();
+
+  Big['default'] = Big.Big = Big;
+
+  //AMD.
+  if (typeof define === 'function' && define.amd) {
+    define(function () { return Big; });
+
+  // Node and other CommonJS-like environments that support module.exports.
+  } else if ( true && module.exports) {
+    module.exports = Big;
+
+  //Browser.
+  } else {
+    GLOBAL.Big = Big;
+  }
+})(this);
+
+
+/***/ }),
+
+/***/ 585:
+/***/ ((module) => {
+
+module.exports = [
+  "🀄️",
+  "🃏",
+  "🅰️",
+  "🅱️",
+  "🅾️",
+  "🅿️",
+  "🆎",
+  "🆑",
+  "🆒",
+  "🆓",
+  "🆔",
+  "🆕",
+  "🆖",
+  "🆗",
+  "🆘",
+  "🆙",
+  "🆚",
+  "🇦🇨",
+  "🇦🇩",
+  "🇦🇪",
+  "🇦🇫",
+  "🇦🇬",
+  "🇦🇮",
+  "🇦🇱",
+  "🇦🇲",
+  "🇦🇴",
+  "🇦🇶",
+  "🇦🇷",
+  "🇦🇸",
+  "🇦🇹",
+  "🇦🇺",
+  "🇦🇼",
+  "🇦🇽",
+  "🇦🇿",
+  "🇦",
+  "🇧🇦",
+  "🇧🇧",
+  "🇧🇩",
+  "🇧🇪",
+  "🇧🇫",
+  "🇧🇬",
+  "🇧🇭",
+  "🇧🇮",
+  "🇧🇯",
+  "🇧🇱",
+  "🇧🇲",
+  "🇧🇳",
+  "🇧🇴",
+  "🇧🇶",
+  "🇧🇷",
+  "🇧🇸",
+  "🇧🇹",
+  "🇧🇻",
+  "🇧🇼",
+  "🇧🇾",
+  "🇧🇿",
+  "🇧",
+  "🇨🇦",
+  "🇨🇨",
+  "🇨🇩",
+  "🇨🇫",
+  "🇨🇬",
+  "🇨🇭",
+  "🇨🇮",
+  "🇨🇰",
+  "🇨🇱",
+  "🇨🇲",
+  "🇨🇳",
+  "🇨🇴",
+  "🇨🇵",
+  "🇨🇷",
+  "🇨🇺",
+  "🇨🇻",
+  "🇨🇼",
+  "🇨🇽",
+  "🇨🇾",
+  "🇨🇿",
+  "🇨",
+  "🇩🇪",
+  "🇩🇬",
+  "🇩🇯",
+  "🇩🇰",
+  "🇩🇲",
+  "🇩🇴",
+  "🇩🇿",
+  "🇩",
+  "🇪🇦",
+  "🇪🇨",
+  "🇪🇪",
+  "🇪🇬",
+  "🇪🇭",
+  "🇪🇷",
+  "🇪🇸",
+  "🇪🇹",
+  "🇪🇺",
+  "🇪",
+  "🇫🇮",
+  "🇫🇯",
+  "🇫🇰",
+  "🇫🇲",
+  "🇫🇴",
+  "🇫🇷",
+  "🇫",
+  "🇬🇦",
+  "🇬🇧",
+  "🇬🇩",
+  "🇬🇪",
+  "🇬🇫",
+  "🇬🇬",
+  "🇬🇭",
+  "🇬🇮",
+  "🇬🇱",
+  "🇬🇲",
+  "🇬🇳",
+  "🇬🇵",
+  "🇬🇶",
+  "🇬🇷",
+  "🇬🇸",
+  "🇬🇹",
+  "🇬🇺",
+  "🇬🇼",
+  "🇬🇾",
+  "🇬",
+  "🇭🇰",
+  "🇭🇲",
+  "🇭🇳",
+  "🇭🇷",
+  "🇭🇹",
+  "🇭🇺",
+  "🇭",
+  "🇮🇨",
+  "🇮🇩",
+  "🇮🇪",
+  "🇮🇱",
+  "🇮🇲",
+  "🇮🇳",
+  "🇮🇴",
+  "🇮🇶",
+  "🇮🇷",
+  "🇮🇸",
+  "🇮🇹",
+  "🇮",
+  "🇯🇪",
+  "🇯🇲",
+  "🇯🇴",
+  "🇯🇵",
+  "🇯",
+  "🇰🇪",
+  "🇰🇬",
+  "🇰🇭",
+  "🇰🇮",
+  "🇰🇲",
+  "🇰🇳",
+  "🇰🇵",
+  "🇰🇷",
+  "🇰🇼",
+  "🇰🇾",
+  "🇰🇿",
+  "🇰",
+  "🇱🇦",
+  "🇱🇧",
+  "🇱🇨",
+  "🇱🇮",
+  "🇱🇰",
+  "🇱🇷",
+  "🇱🇸",
+  "🇱🇹",
+  "🇱🇺",
+  "🇱🇻",
+  "🇱🇾",
+  "🇱",
+  "🇲🇦",
+  "🇲🇨",
+  "🇲🇩",
+  "🇲🇪",
+  "🇲🇫",
+  "🇲🇬",
+  "🇲🇭",
+  "🇲🇰",
+  "🇲🇱",
+  "🇲🇲",
+  "🇲🇳",
+  "🇲🇴",
+  "🇲🇵",
+  "🇲🇶",
+  "🇲🇷",
+  "🇲🇸",
+  "🇲🇹",
+  "🇲🇺",
+  "🇲🇻",
+  "🇲🇼",
+  "🇲🇽",
+  "🇲🇾",
+  "🇲🇿",
+  "🇲",
+  "🇳🇦",
+  "🇳🇨",
+  "🇳🇪",
+  "🇳🇫",
+  "🇳🇬",
+  "🇳🇮",
+  "🇳🇱",
+  "🇳🇴",
+  "🇳🇵",
+  "🇳🇷",
+  "🇳🇺",
+  "🇳🇿",
+  "🇳",
+  "🇴🇲",
+  "🇴",
+  "🇵🇦",
+  "🇵🇪",
+  "🇵🇫",
+  "🇵🇬",
+  "🇵🇭",
+  "🇵🇰",
+  "🇵🇱",
+  "🇵🇲",
+  "🇵🇳",
+  "🇵🇷",
+  "🇵🇸",
+  "🇵🇹",
+  "🇵🇼",
+  "🇵🇾",
+  "🇵",
+  "🇶🇦",
+  "🇶",
+  "🇷🇪",
+  "🇷🇴",
+  "🇷🇸",
+  "🇷🇺",
+  "🇷🇼",
+  "🇷",
+  "🇸🇦",
+  "🇸🇧",
+  "🇸🇨",
+  "🇸🇩",
+  "🇸🇪",
+  "🇸🇬",
+  "🇸🇭",
+  "🇸🇮",
+  "🇸🇯",
+  "🇸🇰",
+  "🇸🇱",
+  "🇸🇲",
+  "🇸🇳",
+  "🇸🇴",
+  "🇸🇷",
+  "🇸🇸",
+  "🇸🇹",
+  "🇸🇻",
+  "🇸🇽",
+  "🇸🇾",
+  "🇸🇿",
+  "🇸",
+  "🇹🇦",
+  "🇹🇨",
+  "🇹🇩",
+  "🇹🇫",
+  "🇹🇬",
+  "🇹🇭",
+  "🇹🇯",
+  "🇹🇰",
+  "🇹🇱",
+  "🇹🇲",
+  "🇹🇳",
+  "🇹🇴",
+  "🇹🇷",
+  "🇹🇹",
+  "🇹🇻",
+  "🇹🇼",
+  "🇹🇿",
+  "🇹",
+  "🇺🇦",
+  "🇺🇬",
+  "🇺🇲",
+  "🇺🇳",
+  "🇺🇸",
+  "🇺🇾",
+  "🇺🇿",
+  "🇺",
+  "🇻🇦",
+  "🇻🇨",
+  "🇻🇪",
+  "🇻🇬",
+  "🇻🇮",
+  "🇻🇳",
+  "🇻🇺",
+  "🇻",
+  "🇼🇫",
+  "🇼🇸",
+  "🇼",
+  "🇽🇰",
+  "🇽",
+  "🇾🇪",
+  "🇾🇹",
+  "🇾",
+  "🇿🇦",
+  "🇿🇲",
+  "🇿🇼",
+  "🇿",
+  "🈁",
+  "🈂️",
+  "🈚️",
+  "🈯️",
+  "🈲",
+  "🈳",
+  "🈴",
+  "🈵",
+  "🈶",
+  "🈷️",
+  "🈸",
+  "🈹",
+  "🈺",
+  "🉐",
+  "🉑",
+  "🌀",
+  "🌁",
+  "🌂",
+  "🌃",
+  "🌄",
+  "🌅",
+  "🌆",
+  "🌇",
+  "🌈",
+  "🌉",
+  "🌊",
+  "🌋",
+  "🌌",
+  "🌍",
+  "🌎",
+  "🌏",
+  "🌐",
+  "🌑",
+  "🌒",
+  "🌓",
+  "🌔",
+  "🌕",
+  "🌖",
+  "🌗",
+  "🌘",
+  "🌙",
+  "🌚",
+  "🌛",
+  "🌜",
+  "🌝",
+  "🌞",
+  "🌟",
+  "🌠",
+  "🌡️",
+  "🌤️",
+  "🌥️",
+  "🌦️",
+  "🌧️",
+  "🌨️",
+  "🌩️",
+  "🌪️",
+  "🌫️",
+  "🌬️",
+  "🌭",
+  "🌮",
+  "🌯",
+  "🌰",
+  "🌱",
+  "🌲",
+  "🌳",
+  "🌴",
+  "🌵",
+  "🌶️",
+  "🌷",
+  "🌸",
+  "🌹",
+  "🌺",
+  "🌻",
+  "🌼",
+  "🌽",
+  "🌾",
+  "🌿",
+  "🍀",
+  "🍁",
+  "🍂",
+  "🍃",
+  "🍄",
+  "🍅",
+  "🍆",
+  "🍇",
+  "🍈",
+  "🍉",
+  "🍊",
+  "🍋",
+  "🍌",
+  "🍍",
+  "🍎",
+  "🍏",
+  "🍐",
+  "🍑",
+  "🍒",
+  "🍓",
+  "🍔",
+  "🍕",
+  "🍖",
+  "🍗",
+  "🍘",
+  "🍙",
+  "🍚",
+  "🍛",
+  "🍜",
+  "🍝",
+  "🍞",
+  "🍟",
+  "🍠",
+  "🍡",
+  "🍢",
+  "🍣",
+  "🍤",
+  "🍥",
+  "🍦",
+  "🍧",
+  "🍨",
+  "🍩",
+  "🍪",
+  "🍫",
+  "🍬",
+  "🍭",
+  "🍮",
+  "🍯",
+  "🍰",
+  "🍱",
+  "🍲",
+  "🍳",
+  "🍴",
+  "🍵",
+  "🍶",
+  "🍷",
+  "🍸",
+  "🍹",
+  "🍺",
+  "🍻",
+  "🍼",
+  "🍽️",
+  "🍾",
+  "🍿",
+  "🎀",
+  "🎁",
+  "🎂",
+  "🎃",
+  "🎄",
+  "🎅🏻",
+  "🎅🏼",
+  "🎅🏽",
+  "🎅🏾",
+  "🎅🏿",
+  "🎅",
+  "🎆",
+  "🎇",
+  "🎈",
+  "🎉",
+  "🎊",
+  "🎋",
+  "🎌",
+  "🎍",
+  "🎎",
+  "🎏",
+  "🎐",
+  "🎑",
+  "🎒",
+  "🎓",
+  "🎖️",
+  "🎗️",
+  "🎙️",
+  "🎚️",
+  "🎛️",
+  "🎞️",
+  "🎟️",
+  "🎠",
+  "🎡",
+  "🎢",
+  "🎣",
+  "🎤",
+  "🎥",
+  "🎦",
+  "🎧",
+  "🎨",
+  "🎩",
+  "🎪",
+  "🎫",
+  "🎬",
+  "🎭",
+  "🎮",
+  "🎯",
+  "🎰",
+  "🎱",
+  "🎲",
+  "🎳",
+  "🎴",
+  "🎵",
+  "🎶",
+  "🎷",
+  "🎸",
+  "🎹",
+  "🎺",
+  "🎻",
+  "🎼",
+  "🎽",
+  "🎾",
+  "🎿",
+  "🏀",
+  "🏁",
+  "🏂🏻",
+  "🏂🏼",
+  "🏂🏽",
+  "🏂🏾",
+  "🏂🏿",
+  "🏂",
+  "🏃🏻‍♀️",
+  "🏃🏻‍♂️",
+  "🏃🏻",
+  "🏃🏼‍♀️",
+  "🏃🏼‍♂️",
+  "🏃🏼",
+  "🏃🏽‍♀️",
+  "🏃🏽‍♂️",
+  "🏃🏽",
+  "🏃🏾‍♀️",
+  "🏃🏾‍♂️",
+  "🏃🏾",
+  "🏃🏿‍♀️",
+  "🏃🏿‍♂️",
+  "🏃🏿",
+  "🏃‍♀️",
+  "🏃‍♂️",
+  "🏃",
+  "🏄🏻‍♀️",
+  "🏄🏻‍♂️",
+  "🏄🏻",
+  "🏄🏼‍♀️",
+  "🏄🏼‍♂️",
+  "🏄🏼",
+  "🏄🏽‍♀️",
+  "🏄🏽‍♂️",
+  "🏄🏽",
+  "🏄🏾‍♀️",
+  "🏄🏾‍♂️",
+  "🏄🏾",
+  "🏄🏿‍♀️",
+  "🏄🏿‍♂️",
+  "🏄🏿",
+  "🏄‍♀️",
+  "🏄‍♂️",
+  "🏄",
+  "🏅",
+  "🏆",
+  "🏇🏻",
+  "🏇🏼",
+  "🏇🏽",
+  "🏇🏾",
+  "🏇🏿",
+  "🏇",
+  "🏈",
+  "🏉",
+  "🏊🏻‍♀️",
+  "🏊🏻‍♂️",
+  "🏊🏻",
+  "🏊🏼‍♀️",
+  "🏊🏼‍♂️",
+  "🏊🏼",
+  "🏊🏽‍♀️",
+  "🏊🏽‍♂️",
+  "🏊🏽",
+  "🏊🏾‍♀️",
+  "🏊🏾‍♂️",
+  "🏊🏾",
+  "🏊🏿‍♀️",
+  "🏊🏿‍♂️",
+  "🏊🏿",
+  "🏊‍♀️",
+  "🏊‍♂️",
+  "🏊",
+  "🏋🏻‍♀️",
+  "🏋🏻‍♂️",
+  "🏋🏻",
+  "🏋🏼‍♀️",
+  "🏋🏼‍♂️",
+  "🏋🏼",
+  "🏋🏽‍♀️",
+  "🏋🏽‍♂️",
+  "🏋🏽",
+  "🏋🏾‍♀️",
+  "🏋🏾‍♂️",
+  "🏋🏾",
+  "🏋🏿‍♀️",
+  "🏋🏿‍♂️",
+  "🏋🏿",
+  "🏋️‍♀️",
+  "🏋️‍♂️",
+  "🏋️",
+  "🏌🏻‍♀️",
+  "🏌🏻‍♂️",
+  "🏌🏻",
+  "🏌🏼‍♀️",
+  "🏌🏼‍♂️",
+  "🏌🏼",
+  "🏌🏽‍♀️",
+  "🏌🏽‍♂️",
+  "🏌🏽",
+  "🏌🏾‍♀️",
+  "🏌🏾‍♂️",
+  "🏌🏾",
+  "🏌🏿‍♀️",
+  "🏌🏿‍♂️",
+  "🏌🏿",
+  "🏌️‍♀️",
+  "🏌️‍♂️",
+  "🏌️",
+  "🏍️",
+  "🏎️",
+  "🏏",
+  "🏐",
+  "🏑",
+  "🏒",
+  "🏓",
+  "🏔️",
+  "🏕️",
+  "🏖️",
+  "🏗️",
+  "🏘️",
+  "🏙️",
+  "🏚️",
+  "🏛️",
+  "🏜️",
+  "🏝️",
+  "🏞️",
+  "🏟️",
+  "🏠",
+  "🏡",
+  "🏢",
+  "🏣",
+  "🏤",
+  "🏥",
+  "🏦",
+  "🏧",
+  "🏨",
+  "🏩",
+  "🏪",
+  "🏫",
+  "🏬",
+  "🏭",
+  "🏮",
+  "🏯",
+  "🏰",
+  "🏳️‍🌈",
+  "🏳️",
+  "🏴‍☠️",
+  "🏴󠁧󠁢󠁥󠁮󠁧󠁿",
+  "🏴󠁧󠁢󠁳󠁣󠁴󠁿",
+  "🏴󠁧󠁢󠁷󠁬󠁳󠁿",
+  "🏴",
+  "🏵️",
+  "🏷️",
+  "🏸",
+  "🏹",
+  "🏺",
+  "🏻",
+  "🏼",
+  "🏽",
+  "🏾",
+  "🏿",
+  "🐀",
+  "🐁",
+  "🐂",
+  "🐃",
+  "🐄",
+  "🐅",
+  "🐆",
+  "🐇",
+  "🐈",
+  "🐉",
+  "🐊",
+  "🐋",
+  "🐌",
+  "🐍",
+  "🐎",
+  "🐏",
+  "🐐",
+  "🐑",
+  "🐒",
+  "🐓",
+  "🐔",
+  "🐕‍🦺",
+  "🐕",
+  "🐖",
+  "🐗",
+  "🐘",
+  "🐙",
+  "🐚",
+  "🐛",
+  "🐜",
+  "🐝",
+  "🐞",
+  "🐟",
+  "🐠",
+  "🐡",
+  "🐢",
+  "🐣",
+  "🐤",
+  "🐥",
+  "🐦",
+  "🐧",
+  "🐨",
+  "🐩",
+  "🐪",
+  "🐫",
+  "🐬",
+  "🐭",
+  "🐮",
+  "🐯",
+  "🐰",
+  "🐱",
+  "🐲",
+  "🐳",
+  "🐴",
+  "🐵",
+  "🐶",
+  "🐷",
+  "🐸",
+  "🐹",
+  "🐺",
+  "🐻",
+  "🐼",
+  "🐽",
+  "🐾",
+  "🐿️",
+  "👀",
+  "👁‍🗨",
+  "👁️",
+  "👂🏻",
+  "👂🏼",
+  "👂🏽",
+  "👂🏾",
+  "👂🏿",
+  "👂",
+  "👃🏻",
+  "👃🏼",
+  "👃🏽",
+  "👃🏾",
+  "👃🏿",
+  "👃",
+  "👄",
+  "👅",
+  "👆🏻",
+  "👆🏼",
+  "👆🏽",
+  "👆🏾",
+  "👆🏿",
+  "👆",
+  "👇🏻",
+  "👇🏼",
+  "👇🏽",
+  "👇🏾",
+  "👇🏿",
+  "👇",
+  "👈🏻",
+  "👈🏼",
+  "👈🏽",
+  "👈🏾",
+  "👈🏿",
+  "👈",
+  "👉🏻",
+  "👉🏼",
+  "👉🏽",
+  "👉🏾",
+  "👉🏿",
+  "👉",
+  "👊🏻",
+  "👊🏼",
+  "👊🏽",
+  "👊🏾",
+  "👊🏿",
+  "👊",
+  "👋🏻",
+  "👋🏼",
+  "👋🏽",
+  "👋🏾",
+  "👋🏿",
+  "👋",
+  "👌🏻",
+  "👌🏼",
+  "👌🏽",
+  "👌🏾",
+  "👌🏿",
+  "👌",
+  "👍🏻",
+  "👍🏼",
+  "👍🏽",
+  "👍🏾",
+  "👍🏿",
+  "👍",
+  "👎🏻",
+  "👎🏼",
+  "👎🏽",
+  "👎🏾",
+  "👎🏿",
+  "👎",
+  "👏🏻",
+  "👏🏼",
+  "👏🏽",
+  "👏🏾",
+  "👏🏿",
+  "👏",
+  "👐🏻",
+  "👐🏼",
+  "👐🏽",
+  "👐🏾",
+  "👐🏿",
+  "👐",
+  "👑",
+  "👒",
+  "👓",
+  "👔",
+  "👕",
+  "👖",
+  "👗",
+  "👘",
+  "👙",
+  "👚",
+  "👛",
+  "👜",
+  "👝",
+  "👞",
+  "👟",
+  "👠",
+  "👡",
+  "👢",
+  "👣",
+  "👤",
+  "👥",
+  "👦🏻",
+  "👦🏼",
+  "👦🏽",
+  "👦🏾",
+  "👦🏿",
+  "👦",
+  "👧🏻",
+  "👧🏼",
+  "👧🏽",
+  "👧🏾",
+  "👧🏿",
+  "👧",
+  "👨🏻‍🌾",
+  "👨🏻‍🍳",
+  "👨🏻‍🎓",
+  "👨🏻‍🎤",
+  "👨🏻‍🎨",
+  "👨🏻‍🏫",
+  "👨🏻‍🏭",
+  "👨🏻‍💻",
+  "👨🏻‍💼",
+  "👨🏻‍🔧",
+  "👨🏻‍🔬",
+  "👨🏻‍🚀",
+  "👨🏻‍🚒",
+  "👨🏻‍🦯",
+  "👨🏻‍🦰",
+  "👨🏻‍🦱",
+  "👨🏻‍🦲",
+  "👨🏻‍🦳",
+  "👨🏻‍🦼",
+  "👨🏻‍🦽",
+  "👨🏻‍⚕️",
+  "👨🏻‍⚖️",
+  "👨🏻‍✈️",
+  "👨🏻",
+  "👨🏼‍🌾",
+  "👨🏼‍🍳",
+  "👨🏼‍🎓",
+  "👨🏼‍🎤",
+  "👨🏼‍🎨",
+  "👨🏼‍🏫",
+  "👨🏼‍🏭",
+  "👨🏼‍💻",
+  "👨🏼‍💼",
+  "👨🏼‍🔧",
+  "👨🏼‍🔬",
+  "👨🏼‍🚀",
+  "👨🏼‍🚒",
+  "👨🏼‍🤝‍👨🏻",
+  "👨🏼‍🦯",
+  "👨🏼‍🦰",
+  "👨🏼‍🦱",
+  "👨🏼‍🦲",
+  "👨🏼‍🦳",
+  "👨🏼‍🦼",
+  "👨🏼‍🦽",
+  "👨🏼‍⚕️",
+  "👨🏼‍⚖️",
+  "👨🏼‍✈️",
+  "👨🏼",
+  "👨🏽‍🌾",
+  "👨🏽‍🍳",
+  "👨🏽‍🎓",
+  "👨🏽‍🎤",
+  "👨🏽‍🎨",
+  "👨🏽‍🏫",
+  "👨🏽‍🏭",
+  "👨🏽‍💻",
+  "👨🏽‍💼",
+  "👨🏽‍🔧",
+  "👨🏽‍🔬",
+  "👨🏽‍🚀",
+  "👨🏽‍🚒",
+  "👨🏽‍🤝‍👨🏻",
+  "👨🏽‍🤝‍👨🏼",
+  "👨🏽‍🦯",
+  "👨🏽‍🦰",
+  "👨🏽‍🦱",
+  "👨🏽‍🦲",
+  "👨🏽‍🦳",
+  "👨🏽‍🦼",
+  "👨🏽‍🦽",
+  "👨🏽‍⚕️",
+  "👨🏽‍⚖️",
+  "👨🏽‍✈️",
+  "👨🏽",
+  "👨🏾‍🌾",
+  "👨🏾‍🍳",
+  "👨🏾‍🎓",
+  "👨🏾‍🎤",
+  "👨🏾‍🎨",
+  "👨🏾‍🏫",
+  "👨🏾‍🏭",
+  "👨🏾‍💻",
+  "👨🏾‍💼",
+  "👨🏾‍🔧",
+  "👨🏾‍🔬",
+  "👨🏾‍🚀",
+  "👨🏾‍🚒",
+  "👨🏾‍🤝‍👨🏻",
+  "👨🏾‍🤝‍👨🏼",
+  "👨🏾‍🤝‍👨🏽",
+  "👨🏾‍🦯",
+  "👨🏾‍🦰",
+  "👨🏾‍🦱",
+  "👨🏾‍🦲",
+  "👨🏾‍🦳",
+  "👨🏾‍🦼",
+  "👨🏾‍🦽",
+  "👨🏾‍⚕️",
+  "👨🏾‍⚖️",
+  "👨🏾‍✈️",
+  "👨🏾",
+  "👨🏿‍🌾",
+  "👨🏿‍🍳",
+  "👨🏿‍🎓",
+  "👨🏿‍🎤",
+  "👨🏿‍🎨",
+  "👨🏿‍🏫",
+  "👨🏿‍🏭",
+  "👨🏿‍💻",
+  "👨🏿‍💼",
+  "👨🏿‍🔧",
+  "👨🏿‍🔬",
+  "👨🏿‍🚀",
+  "👨🏿‍🚒",
+  "👨🏿‍🤝‍👨🏻",
+  "👨🏿‍🤝‍👨🏼",
+  "👨🏿‍🤝‍👨🏽",
+  "👨🏿‍🤝‍👨🏾",
+  "👨🏿‍🦯",
+  "👨🏿‍🦰",
+  "👨🏿‍🦱",
+  "👨🏿‍🦲",
+  "👨🏿‍🦳",
+  "👨🏿‍🦼",
+  "👨🏿‍🦽",
+  "👨🏿‍⚕️",
+  "👨🏿‍⚖️",
+  "👨🏿‍✈️",
+  "👨🏿",
+  "👨‍🌾",
+  "👨‍🍳",
+  "👨‍🎓",
+  "👨‍🎤",
+  "👨‍🎨",
+  "👨‍🏫",
+  "👨‍🏭",
+  "👨‍👦‍👦",
+  "👨‍👦",
+  "👨‍👧‍👦",
+  "👨‍👧‍👧",
+  "👨‍👧",
+  "👨‍👨‍👦‍👦",
+  "👨‍👨‍👦",
+  "👨‍👨‍👧‍👦",
+  "👨‍👨‍👧‍👧",
+  "👨‍👨‍👧",
+  "👨‍👩‍👦‍👦",
+  "👨‍👩‍👦",
+  "👨‍👩‍👧‍👦",
+  "👨‍👩‍👧‍👧",
+  "👨‍👩‍👧",
+  "👨‍💻",
+  "👨‍💼",
+  "👨‍🔧",
+  "👨‍🔬",
+  "👨‍🚀",
+  "👨‍🚒",
+  "👨‍🦯",
+  "👨‍🦰",
+  "👨‍🦱",
+  "👨‍🦲",
+  "👨‍🦳",
+  "👨‍🦼",
+  "👨‍🦽",
+  "👨‍⚕️",
+  "👨‍⚖️",
+  "👨‍✈️",
+  "👨‍❤️‍👨",
+  "👨‍❤️‍💋‍👨",
+  "👨",
+  "👩🏻‍🌾",
+  "👩🏻‍🍳",
+  "👩🏻‍🎓",
+  "👩🏻‍🎤",
+  "👩🏻‍🎨",
+  "👩🏻‍🏫",
+  "👩🏻‍🏭",
+  "👩🏻‍💻",
+  "👩🏻‍💼",
+  "👩🏻‍🔧",
+  "👩🏻‍🔬",
+  "👩🏻‍🚀",
+  "👩🏻‍🚒",
+  "👩🏻‍🤝‍👨🏼",
+  "👩🏻‍🤝‍👨🏽",
+  "👩🏻‍🤝‍👨🏾",
+  "👩🏻‍🤝‍👨🏿",
+  "👩🏻‍🦯",
+  "👩🏻‍🦰",
+  "👩🏻‍🦱",
+  "👩🏻‍🦲",
+  "👩🏻‍🦳",
+  "👩🏻‍🦼",
+  "👩🏻‍🦽",
+  "👩🏻‍⚕️",
+  "👩🏻‍⚖️",
+  "👩🏻‍✈️",
+  "👩🏻",
+  "👩🏼‍🌾",
+  "👩🏼‍🍳",
+  "👩🏼‍🎓",
+  "👩🏼‍🎤",
+  "👩🏼‍🎨",
+  "👩🏼‍🏫",
+  "👩🏼‍🏭",
+  "👩🏼‍💻",
+  "👩🏼‍💼",
+  "👩🏼‍🔧",
+  "👩🏼‍🔬",
+  "👩🏼‍🚀",
+  "👩🏼‍🚒",
+  "👩🏼‍🤝‍👨🏻",
+  "👩🏼‍🤝‍👨🏽",
+  "👩🏼‍🤝‍👨🏾",
+  "👩🏼‍🤝‍👨🏿",
+  "👩🏼‍🤝‍👩🏻",
+  "👩🏼‍🦯",
+  "👩🏼‍🦰",
+  "👩🏼‍🦱",
+  "👩🏼‍🦲",
+  "👩🏼‍🦳",
+  "👩🏼‍🦼",
+  "👩🏼‍🦽",
+  "👩🏼‍⚕️",
+  "👩🏼‍⚖️",
+  "👩🏼‍✈️",
+  "👩🏼",
+  "👩🏽‍🌾",
+  "👩🏽‍🍳",
+  "👩🏽‍🎓",
+  "👩🏽‍🎤",
+  "👩🏽‍🎨",
+  "👩🏽‍🏫",
+  "👩🏽‍🏭",
+  "👩🏽‍💻",
+  "👩🏽‍💼",
+  "👩🏽‍🔧",
+  "👩🏽‍🔬",
+  "👩🏽‍🚀",
+  "👩🏽‍🚒",
+  "👩🏽‍🤝‍👨🏻",
+  "👩🏽‍🤝‍👨🏼",
+  "👩🏽‍🤝‍👨🏾",
+  "👩🏽‍🤝‍👨🏿",
+  "👩🏽‍🤝‍👩🏻",
+  "👩🏽‍🤝‍👩🏼",
+  "👩🏽‍🦯",
+  "👩🏽‍🦰",
+  "👩🏽‍🦱",
+  "👩🏽‍🦲",
+  "👩🏽‍🦳",
+  "👩🏽‍🦼",
+  "👩🏽‍🦽",
+  "👩🏽‍⚕️",
+  "👩🏽‍⚖️",
+  "👩🏽‍✈️",
+  "👩🏽",
+  "👩🏾‍🌾",
+  "👩🏾‍🍳",
+  "👩🏾‍🎓",
+  "👩🏾‍🎤",
+  "👩🏾‍🎨",
+  "👩🏾‍🏫",
+  "👩🏾‍🏭",
+  "👩🏾‍💻",
+  "👩🏾‍💼",
+  "👩🏾‍🔧",
+  "👩🏾‍🔬",
+  "👩🏾‍🚀",
+  "👩🏾‍🚒",
+  "👩🏾‍🤝‍👨🏻",
+  "👩🏾‍🤝‍👨🏼",
+  "👩🏾‍🤝‍👨🏽",
+  "👩🏾‍🤝‍👨🏿",
+  "👩🏾‍🤝‍👩🏻",
+  "👩🏾‍🤝‍👩🏼",
+  "👩🏾‍🤝‍👩🏽",
+  "👩🏾‍🦯",
+  "👩🏾‍🦰",
+  "👩🏾‍🦱",
+  "👩🏾‍🦲",
+  "👩🏾‍🦳",
+  "👩🏾‍🦼",
+  "👩🏾‍🦽",
+  "👩🏾‍⚕️",
+  "👩🏾‍⚖️",
+  "👩🏾‍✈️",
+  "👩🏾",
+  "👩🏿‍🌾",
+  "👩🏿‍🍳",
+  "👩🏿‍🎓",
+  "👩🏿‍🎤",
+  "👩🏿‍🎨",
+  "👩🏿‍🏫",
+  "👩🏿‍🏭",
+  "👩🏿‍💻",
+  "👩🏿‍💼",
+  "👩🏿‍🔧",
+  "👩🏿‍🔬",
+  "👩🏿‍🚀",
+  "👩🏿‍🚒",
+  "👩🏿‍🤝‍👨🏻",
+  "👩🏿‍🤝‍👨🏼",
+  "👩🏿‍🤝‍👨🏽",
+  "👩🏿‍🤝‍👨🏾",
+  "👩🏿‍🤝‍👩🏻",
+  "👩🏿‍🤝‍👩🏼",
+  "👩🏿‍🤝‍👩🏽",
+  "👩🏿‍🤝‍👩🏾",
+  "👩🏿‍🦯",
+  "👩🏿‍🦰",
+  "👩🏿‍🦱",
+  "👩🏿‍🦲",
+  "👩🏿‍🦳",
+  "👩🏿‍🦼",
+  "👩🏿‍🦽",
+  "👩🏿‍⚕️",
+  "👩🏿‍⚖️",
+  "👩🏿‍✈️",
+  "👩🏿",
+  "👩‍🌾",
+  "👩‍🍳",
+  "👩‍🎓",
+  "👩‍🎤",
+  "👩‍🎨",
+  "👩‍🏫",
+  "👩‍🏭",
+  "👩‍👦‍👦",
+  "👩‍👦",
+  "👩‍👧‍👦",
+  "👩‍👧‍👧",
+  "👩‍👧",
+  "👩‍👩‍👦‍👦",
+  "👩‍👩‍👦",
+  "👩‍👩‍👧‍👦",
+  "👩‍👩‍👧‍👧",
+  "👩‍👩‍👧",
+  "👩‍💻",
+  "👩‍💼",
+  "👩‍🔧",
+  "👩‍🔬",
+  "👩‍🚀",
+  "👩‍🚒",
+  "👩‍🦯",
+  "👩‍🦰",
+  "👩‍🦱",
+  "👩‍🦲",
+  "👩‍🦳",
+  "👩‍🦼",
+  "👩‍🦽",
+  "👩‍⚕️",
+  "👩‍⚖️",
+  "👩‍✈️",
+  "👩‍❤️‍👨",
+  "👩‍❤️‍👩",
+  "👩‍❤️‍💋‍👨",
+  "👩‍❤️‍💋‍👩",
+  "👩",
+  "👪",
+  "👫🏻",
+  "👫🏼",
+  "👫🏽",
+  "👫🏾",
+  "👫🏿",
+  "👫",
+  "👬🏻",
+  "👬🏼",
+  "👬🏽",
+  "👬🏾",
+  "👬🏿",
+  "👬",
+  "👭🏻",
+  "👭🏼",
+  "👭🏽",
+  "👭🏾",
+  "👭🏿",
+  "👭",
+  "👮🏻‍♀️",
+  "👮🏻‍♂️",
+  "👮🏻",
+  "👮🏼‍♀️",
+  "👮🏼‍♂️",
+  "👮🏼",
+  "👮🏽‍♀️",
+  "👮🏽‍♂️",
+  "👮🏽",
+  "👮🏾‍♀️",
+  "👮🏾‍♂️",
+  "👮🏾",
+  "👮🏿‍♀️",
+  "👮🏿‍♂️",
+  "👮🏿",
+  "👮‍♀️",
+  "👮‍♂️",
+  "👮",
+  "👯‍♀️",
+  "👯‍♂️",
+  "👯",
+  "👰🏻",
+  "👰🏼",
+  "👰🏽",
+  "👰🏾",
+  "👰🏿",
+  "👰",
+  "👱🏻‍♀️",
+  "👱🏻‍♂️",
+  "👱🏻",
+  "👱🏼‍♀️",
+  "👱🏼‍♂️",
+  "👱🏼",
+  "👱🏽‍♀️",
+  "👱🏽‍♂️",
+  "👱🏽",
+  "👱🏾‍♀️",
+  "👱🏾‍♂️",
+  "👱🏾",
+  "👱🏿‍♀️",
+  "👱🏿‍♂️",
+  "👱🏿",
+  "👱‍♀️",
+  "👱‍♂️",
+  "👱",
+  "👲🏻",
+  "👲🏼",
+  "👲🏽",
+  "👲🏾",
+  "👲🏿",
+  "👲",
+  "👳🏻‍♀️",
+  "👳🏻‍♂️",
+  "👳🏻",
+  "👳🏼‍♀️",
+  "👳🏼‍♂️",
+  "👳🏼",
+  "👳🏽‍♀️",
+  "👳🏽‍♂️",
+  "👳🏽",
+  "👳🏾‍♀️",
+  "👳🏾‍♂️",
+  "👳🏾",
+  "👳🏿‍♀️",
+  "👳🏿‍♂️",
+  "👳🏿",
+  "👳‍♀️",
+  "👳‍♂️",
+  "👳",
+  "👴🏻",
+  "👴🏼",
+  "👴🏽",
+  "👴🏾",
+  "👴🏿",
+  "👴",
+  "👵🏻",
+  "👵🏼",
+  "👵🏽",
+  "👵🏾",
+  "👵🏿",
+  "👵",
+  "👶🏻",
+  "👶🏼",
+  "👶🏽",
+  "👶🏾",
+  "👶🏿",
+  "👶",
+  "👷🏻‍♀️",
+  "👷🏻‍♂️",
+  "👷🏻",
+  "👷🏼‍♀️",
+  "👷🏼‍♂️",
+  "👷🏼",
+  "👷🏽‍♀️",
+  "👷🏽‍♂️",
+  "👷🏽",
+  "👷🏾‍♀️",
+  "👷🏾‍♂️",
+  "👷🏾",
+  "👷🏿‍♀️",
+  "👷🏿‍♂️",
+  "👷🏿",
+  "👷‍♀️",
+  "👷‍♂️",
+  "👷",
+  "👸🏻",
+  "👸🏼",
+  "👸🏽",
+  "👸🏾",
+  "👸🏿",
+  "👸",
+  "👹",
+  "👺",
+  "👻",
+  "👼🏻",
+  "👼🏼",
+  "👼🏽",
+  "👼🏾",
+  "👼🏿",
+  "👼",
+  "👽",
+  "👾",
+  "👿",
+  "💀",
+  "💁🏻‍♀️",
+  "💁🏻‍♂️",
+  "💁🏻",
+  "💁🏼‍♀️",
+  "💁🏼‍♂️",
+  "💁🏼",
+  "💁🏽‍♀️",
+  "💁🏽‍♂️",
+  "💁🏽",
+  "💁🏾‍♀️",
+  "💁🏾‍♂️",
+  "💁🏾",
+  "💁🏿‍♀️",
+  "💁🏿‍♂️",
+  "💁🏿",
+  "💁‍♀️",
+  "💁‍♂️",
+  "💁",
+  "💂🏻‍♀️",
+  "💂🏻‍♂️",
+  "💂🏻",
+  "💂🏼‍♀️",
+  "💂🏼‍♂️",
+  "💂🏼",
+  "💂🏽‍♀️",
+  "💂🏽‍♂️",
+  "💂🏽",
+  "💂🏾‍♀️",
+  "💂🏾‍♂️",
+  "💂🏾",
+  "💂🏿‍♀️",
+  "💂🏿‍♂️",
+  "💂🏿",
+  "💂‍♀️",
+  "💂‍♂️",
+  "💂",
+  "💃🏻",
+  "💃🏼",
+  "💃🏽",
+  "💃🏾",
+  "💃🏿",
+  "💃",
+  "💄",
+  "💅🏻",
+  "💅🏼",
+  "💅🏽",
+  "💅🏾",
+  "💅🏿",
+  "💅",
+  "💆🏻‍♀️",
+  "💆🏻‍♂️",
+  "💆🏻",
+  "💆🏼‍♀️",
+  "💆🏼‍♂️",
+  "💆🏼",
+  "💆🏽‍♀️",
+  "💆🏽‍♂️",
+  "💆🏽",
+  "💆🏾‍♀️",
+  "💆🏾‍♂️",
+  "💆🏾",
+  "💆🏿‍♀️",
+  "💆🏿‍♂️",
+  "💆🏿",
+  "💆‍♀️",
+  "💆‍♂️",
+  "💆",
+  "💇🏻‍♀️",
+  "💇🏻‍♂️",
+  "💇🏻",
+  "💇🏼‍♀️",
+  "💇🏼‍♂️",
+  "💇🏼",
+  "💇🏽‍♀️",
+  "💇🏽‍♂️",
+  "💇🏽",
+  "💇🏾‍♀️",
+  "💇🏾‍♂️",
+  "💇🏾",
+  "💇🏿‍♀️",
+  "💇🏿‍♂️",
+  "💇🏿",
+  "💇‍♀️",
+  "💇‍♂️",
+  "💇",
+  "💈",
+  "💉",
+  "💊",
+  "💋",
+  "💌",
+  "💍",
+  "💎",
+  "💏",
+  "💐",
+  "💑",
+  "💒",
+  "💓",
+  "💔",
+  "💕",
+  "💖",
+  "💗",
+  "💘",
+  "💙",
+  "💚",
+  "💛",
+  "💜",
+  "💝",
+  "💞",
+  "💟",
+  "💠",
+  "💡",
+  "💢",
+  "💣",
+  "💤",
+  "💥",
+  "💦",
+  "💧",
+  "💨",
+  "💩",
+  "💪🏻",
+  "💪🏼",
+  "💪🏽",
+  "💪🏾",
+  "💪🏿",
+  "💪",
+  "💫",
+  "💬",
+  "💭",
+  "💮",
+  "💯",
+  "💰",
+  "💱",
+  "💲",
+  "💳",
+  "💴",
+  "💵",
+  "💶",
+  "💷",
+  "💸",
+  "💹",
+  "💺",
+  "💻",
+  "💼",
+  "💽",
+  "💾",
+  "💿",
+  "📀",
+  "📁",
+  "📂",
+  "📃",
+  "📄",
+  "📅",
+  "📆",
+  "📇",
+  "📈",
+  "📉",
+  "📊",
+  "📋",
+  "📌",
+  "📍",
+  "📎",
+  "📏",
+  "📐",
+  "📑",
+  "📒",
+  "📓",
+  "📔",
+  "📕",
+  "📖",
+  "📗",
+  "📘",
+  "📙",
+  "📚",
+  "📛",
+  "📜",
+  "📝",
+  "📞",
+  "📟",
+  "📠",
+  "📡",
+  "📢",
+  "📣",
+  "📤",
+  "📥",
+  "📦",
+  "📧",
+  "📨",
+  "📩",
+  "📪",
+  "📫",
+  "📬",
+  "📭",
+  "📮",
+  "📯",
+  "📰",
+  "📱",
+  "📲",
+  "📳",
+  "📴",
+  "📵",
+  "📶",
+  "📷",
+  "📸",
+  "📹",
+  "📺",
+  "📻",
+  "📼",
+  "📽️",
+  "📿",
+  "🔀",
+  "🔁",
+  "🔂",
+  "🔃",
+  "🔄",
+  "🔅",
+  "🔆",
+  "🔇",
+  "🔈",
+  "🔉",
+  "🔊",
+  "🔋",
+  "🔌",
+  "🔍",
+  "🔎",
+  "🔏",
+  "🔐",
+  "🔑",
+  "🔒",
+  "🔓",
+  "🔔",
+  "🔕",
+  "🔖",
+  "🔗",
+  "🔘",
+  "🔙",
+  "🔚",
+  "🔛",
+  "🔜",
+  "🔝",
+  "🔞",
+  "🔟",
+  "🔠",
+  "🔡",
+  "🔢",
+  "🔣",
+  "🔤",
+  "🔥",
+  "🔦",
+  "🔧",
+  "🔨",
+  "🔩",
+  "🔪",
+  "🔫",
+  "🔬",
+  "🔭",
+  "🔮",
+  "🔯",
+  "🔰",
+  "🔱",
+  "🔲",
+  "🔳",
+  "🔴",
+  "🔵",
+  "🔶",
+  "🔷",
+  "🔸",
+  "🔹",
+  "🔺",
+  "🔻",
+  "🔼",
+  "🔽",
+  "🕉️",
+  "🕊️",
+  "🕋",
+  "🕌",
+  "🕍",
+  "🕎",
+  "🕐",
+  "🕑",
+  "🕒",
+  "🕓",
+  "🕔",
+  "🕕",
+  "🕖",
+  "🕗",
+  "🕘",
+  "🕙",
+  "🕚",
+  "🕛",
+  "🕜",
+  "🕝",
+  "🕞",
+  "🕟",
+  "🕠",
+  "🕡",
+  "🕢",
+  "🕣",
+  "🕤",
+  "🕥",
+  "🕦",
+  "🕧",
+  "🕯️",
+  "🕰️",
+  "🕳️",
+  "🕴🏻‍♀️",
+  "🕴🏻‍♂️",
+  "🕴🏻",
+  "🕴🏼‍♀️",
+  "🕴🏼‍♂️",
+  "🕴🏼",
+  "🕴🏽‍♀️",
+  "🕴🏽‍♂️",
+  "🕴🏽",
+  "🕴🏾‍♀️",
+  "🕴🏾‍♂️",
+  "🕴🏾",
+  "🕴🏿‍♀️",
+  "🕴🏿‍♂️",
+  "🕴🏿",
+  "🕴️‍♀️",
+  "🕴️‍♂️",
+  "🕴️",
+  "🕵🏻‍♀️",
+  "🕵🏻‍♂️",
+  "🕵🏻",
+  "🕵🏼‍♀️",
+  "🕵🏼‍♂️",
+  "🕵🏼",
+  "🕵🏽‍♀️",
+  "🕵🏽‍♂️",
+  "🕵🏽",
+  "🕵🏾‍♀️",
+  "🕵🏾‍♂️",
+  "🕵🏾",
+  "🕵🏿‍♀️",
+  "🕵🏿‍♂️",
+  "🕵🏿",
+  "🕵️‍♀️",
+  "🕵️‍♂️",
+  "🕵️",
+  "🕶️",
+  "🕷️",
+  "🕸️",
+  "🕹️",
+  "🕺🏻",
+  "🕺🏼",
+  "🕺🏽",
+  "🕺🏾",
+  "🕺🏿",
+  "🕺",
+  "🖇️",
+  "🖊️",
+  "🖋️",
+  "🖌️",
+  "🖍️",
+  "🖐🏻",
+  "🖐🏼",
+  "🖐🏽",
+  "🖐🏾",
+  "🖐🏿",
+  "🖐️",
+  "🖕🏻",
+  "🖕🏼",
+  "🖕🏽",
+  "🖕🏾",
+  "🖕🏿",
+  "🖕",
+  "🖖🏻",
+  "🖖🏼",
+  "🖖🏽",
+  "🖖🏾",
+  "🖖🏿",
+  "🖖",
+  "🖤",
+  "🖥️",
+  "🖨️",
+  "🖱️",
+  "🖲️",
+  "🖼️",
+  "🗂️",
+  "🗃️",
+  "🗄️",
+  "🗑️",
+  "🗒️",
+  "🗓️",
+  "🗜️",
+  "🗝️",
+  "🗞️",
+  "🗡️",
+  "🗣️",
+  "🗨️",
+  "🗯️",
+  "🗳️",
+  "🗺️",
+  "🗻",
+  "🗼",
+  "🗽",
+  "🗾",
+  "🗿",
+  "😀",
+  "😁",
+  "😂",
+  "😃",
+  "😄",
+  "😅",
+  "😆",
+  "😇",
+  "😈",
+  "😉",
+  "😊",
+  "😋",
+  "😌",
+  "😍",
+  "😎",
+  "😏",
+  "😐",
+  "😑",
+  "😒",
+  "😓",
+  "😔",
+  "😕",
+  "😖",
+  "😗",
+  "😘",
+  "😙",
+  "😚",
+  "😛",
+  "😜",
+  "😝",
+  "😞",
+  "😟",
+  "😠",
+  "😡",
+  "😢",
+  "😣",
+  "😤",
+  "😥",
+  "😦",
+  "😧",
+  "😨",
+  "😩",
+  "😪",
+  "😫",
+  "😬",
+  "😭",
+  "😮",
+  "😯",
+  "😰",
+  "😱",
+  "😲",
+  "😳",
+  "😴",
+  "😵",
+  "😶",
+  "😷",
+  "😸",
+  "😹",
+  "😺",
+  "😻",
+  "😼",
+  "😽",
+  "😾",
+  "😿",
+  "🙀",
+  "🙁",
+  "🙂",
+  "🙃",
+  "🙄",
+  "🙅🏻‍♀️",
+  "🙅🏻‍♂️",
+  "🙅🏻",
+  "🙅🏼‍♀️",
+  "🙅🏼‍♂️",
+  "🙅🏼",
+  "🙅🏽‍♀️",
+  "🙅🏽‍♂️",
+  "🙅🏽",
+  "🙅🏾‍♀️",
+  "🙅🏾‍♂️",
+  "🙅🏾",
+  "🙅🏿‍♀️",
+  "🙅🏿‍♂️",
+  "🙅🏿",
+  "🙅‍♀️",
+  "🙅‍♂️",
+  "🙅",
+  "🙆🏻‍♀️",
+  "🙆🏻‍♂️",
+  "🙆🏻",
+  "🙆🏼‍♀️",
+  "🙆🏼‍♂️",
+  "🙆🏼",
+  "🙆🏽‍♀️",
+  "🙆🏽‍♂️",
+  "🙆🏽",
+  "🙆🏾‍♀️",
+  "🙆🏾‍♂️",
+  "🙆🏾",
+  "🙆🏿‍♀️",
+  "🙆🏿‍♂️",
+  "🙆🏿",
+  "🙆‍♀️",
+  "🙆‍♂️",
+  "🙆",
+  "🙇🏻‍♀️",
+  "🙇🏻‍♂️",
+  "🙇🏻",
+  "🙇🏼‍♀️",
+  "🙇🏼‍♂️",
+  "🙇🏼",
+  "🙇🏽‍♀️",
+  "🙇🏽‍♂️",
+  "🙇🏽",
+  "🙇🏾‍♀️",
+  "🙇🏾‍♂️",
+  "🙇🏾",
+  "🙇🏿‍♀️",
+  "🙇🏿‍♂️",
+  "🙇🏿",
+  "🙇‍♀️",
+  "🙇‍♂️",
+  "🙇",
+  "🙈",
+  "🙉",
+  "🙊",
+  "🙋🏻‍♀️",
+  "🙋🏻‍♂️",
+  "🙋🏻",
+  "🙋🏼‍♀️",
+  "🙋🏼‍♂️",
+  "🙋🏼",
+  "🙋🏽‍♀️",
+  "🙋🏽‍♂️",
+  "🙋🏽",
+  "🙋🏾‍♀️",
+  "🙋🏾‍♂️",
+  "🙋🏾",
+  "🙋🏿‍♀️",
+  "🙋🏿‍♂️",
+  "🙋🏿",
+  "🙋‍♀️",
+  "🙋‍♂️",
+  "🙋",
+  "🙌🏻",
+  "🙌🏼",
+  "🙌🏽",
+  "🙌🏾",
+  "🙌🏿",
+  "🙌",
+  "🙍🏻‍♀️",
+  "🙍🏻‍♂️",
+  "🙍🏻",
+  "🙍🏼‍♀️",
+  "🙍🏼‍♂️",
+  "🙍🏼",
+  "🙍🏽‍♀️",
+  "🙍🏽‍♂️",
+  "🙍🏽",
+  "🙍🏾‍♀️",
+  "🙍🏾‍♂️",
+  "🙍🏾",
+  "🙍🏿‍♀️",
+  "🙍🏿‍♂️",
+  "🙍🏿",
+  "🙍‍♀️",
+  "🙍‍♂️",
+  "🙍",
+  "🙎🏻‍♀️",
+  "🙎🏻‍♂️",
+  "🙎🏻",
+  "🙎🏼‍♀️",
+  "🙎🏼‍♂️",
+  "🙎🏼",
+  "🙎🏽‍♀️",
+  "🙎🏽‍♂️",
+  "🙎🏽",
+  "🙎🏾‍♀️",
+  "🙎🏾‍♂️",
+  "🙎🏾",
+  "🙎🏿‍♀️",
+  "🙎🏿‍♂️",
+  "🙎🏿",
+  "🙎‍♀️",
+  "🙎‍♂️",
+  "🙎",
+  "🙏🏻",
+  "🙏🏼",
+  "🙏🏽",
+  "🙏🏾",
+  "🙏🏿",
+  "🙏",
+  "🚀",
+  "🚁",
+  "🚂",
+  "🚃",
+  "🚄",
+  "🚅",
+  "🚆",
+  "🚇",
+  "🚈",
+  "🚉",
+  "🚊",
+  "🚋",
+  "🚌",
+  "🚍",
+  "🚎",
+  "🚏",
+  "🚐",
+  "🚑",
+  "🚒",
+  "🚓",
+  "🚔",
+  "🚕",
+  "🚖",
+  "🚗",
+  "🚘",
+  "🚙",
+  "🚚",
+  "🚛",
+  "🚜",
+  "🚝",
+  "🚞",
+  "🚟",
+  "🚠",
+  "🚡",
+  "🚢",
+  "🚣🏻‍♀️",
+  "🚣🏻‍♂️",
+  "🚣🏻",
+  "🚣🏼‍♀️",
+  "🚣🏼‍♂️",
+  "🚣🏼",
+  "🚣🏽‍♀️",
+  "🚣🏽‍♂️",
+  "🚣🏽",
+  "🚣🏾‍♀️",
+  "🚣🏾‍♂️",
+  "🚣🏾",
+  "🚣🏿‍♀️",
+  "🚣🏿‍♂️",
+  "🚣🏿",
+  "🚣‍♀️",
+  "🚣‍♂️",
+  "🚣",
+  "🚤",
+  "🚥",
+  "🚦",
+  "🚧",
+  "🚨",
+  "🚩",
+  "🚪",
+  "🚫",
+  "🚬",
+  "🚭",
+  "🚮",
+  "🚯",
+  "🚰",
+  "🚱",
+  "🚲",
+  "🚳",
+  "🚴🏻‍♀️",
+  "🚴🏻‍♂️",
+  "🚴🏻",
+  "🚴🏼‍♀️",
+  "🚴🏼‍♂️",
+  "🚴🏼",
+  "🚴🏽‍♀️",
+  "🚴🏽‍♂️",
+  "🚴🏽",
+  "🚴🏾‍♀️",
+  "🚴🏾‍♂️",
+  "🚴🏾",
+  "🚴🏿‍♀️",
+  "🚴🏿‍♂️",
+  "🚴🏿",
+  "🚴‍♀️",
+  "🚴‍♂️",
+  "🚴",
+  "🚵🏻‍♀️",
+  "🚵🏻‍♂️",
+  "🚵🏻",
+  "🚵🏼‍♀️",
+  "🚵🏼‍♂️",
+  "🚵🏼",
+  "🚵🏽‍♀️",
+  "🚵🏽‍♂️",
+  "🚵🏽",
+  "🚵🏾‍♀️",
+  "🚵🏾‍♂️",
+  "🚵🏾",
+  "🚵🏿‍♀️",
+  "🚵🏿‍♂️",
+  "🚵🏿",
+  "🚵‍♀️",
+  "🚵‍♂️",
+  "🚵",
+  "🚶🏻‍♀️",
+  "🚶🏻‍♂️",
+  "🚶🏻",
+  "🚶🏼‍♀️",
+  "🚶🏼‍♂️",
+  "🚶🏼",
+  "🚶🏽‍♀️",
+  "🚶🏽‍♂️",
+  "🚶🏽",
+  "🚶🏾‍♀️",
+  "🚶🏾‍♂️",
+  "🚶🏾",
+  "🚶🏿‍♀️",
+  "🚶🏿‍♂️",
+  "🚶🏿",
+  "🚶‍♀️",
+  "🚶‍♂️",
+  "🚶",
+  "🚷",
+  "🚸",
+  "🚹",
+  "🚺",
+  "🚻",
+  "🚼",
+  "🚽",
+  "🚾",
+  "🚿",
+  "🛀🏻",
+  "🛀🏼",
+  "🛀🏽",
+  "🛀🏾",
+  "🛀🏿",
+  "🛀",
+  "🛁",
+  "🛂",
+  "🛃",
+  "🛄",
+  "🛅",
+  "🛋️",
+  "🛌🏻",
+  "🛌🏼",
+  "🛌🏽",
+  "🛌🏾",
+  "🛌🏿",
+  "🛌",
+  "🛍️",
+  "🛎️",
+  "🛏️",
+  "🛐",
+  "🛑",
+  "🛒",
+  "🛕",
+  "🛠️",
+  "🛡️",
+  "🛢️",
+  "🛣️",
+  "🛤️",
+  "🛥️",
+  "🛩️",
+  "🛫",
+  "🛬",
+  "🛰️",
+  "🛳️",
+  "🛴",
+  "🛵",
+  "🛶",
+  "🛷",
+  "🛸",
+  "🛹",
+  "🛺",
+  "🟠",
+  "🟡",
+  "🟢",
+  "🟣",
+  "🟤",
+  "🟥",
+  "🟦",
+  "🟧",
+  "🟨",
+  "🟩",
+  "🟪",
+  "🟫",
+  "🤍",
+  "🤎",
+  "🤏🏻",
+  "🤏🏼",
+  "🤏🏽",
+  "🤏🏾",
+  "🤏🏿",
+  "🤏",
+  "🤐",
+  "🤑",
+  "🤒",
+  "🤓",
+  "🤔",
+  "🤕",
+  "🤖",
+  "🤗",
+  "🤘🏻",
+  "🤘🏼",
+  "🤘🏽",
+  "🤘🏾",
+  "🤘🏿",
+  "🤘",
+  "🤙🏻",
+  "🤙🏼",
+  "🤙🏽",
+  "🤙🏾",
+  "🤙🏿",
+  "🤙",
+  "🤚🏻",
+  "🤚🏼",
+  "🤚🏽",
+  "🤚🏾",
+  "🤚🏿",
+  "🤚",
+  "🤛🏻",
+  "🤛🏼",
+  "🤛🏽",
+  "🤛🏾",
+  "🤛🏿",
+  "🤛",
+  "🤜🏻",
+  "🤜🏼",
+  "🤜🏽",
+  "🤜🏾",
+  "🤜🏿",
+  "🤜",
+  "🤝",
+  "🤞🏻",
+  "🤞🏼",
+  "🤞🏽",
+  "🤞🏾",
+  "🤞🏿",
+  "🤞",
+  "🤟🏻",
+  "🤟🏼",
+  "🤟🏽",
+  "🤟🏾",
+  "🤟🏿",
+  "🤟",
+  "🤠",
+  "🤡",
+  "🤢",
+  "🤣",
+  "🤤",
+  "🤥",
+  "🤦🏻‍♀️",
+  "🤦🏻‍♂️",
+  "🤦🏻",
+  "🤦🏼‍♀️",
+  "🤦🏼‍♂️",
+  "🤦🏼",
+  "🤦🏽‍♀️",
+  "🤦🏽‍♂️",
+  "🤦🏽",
+  "🤦🏾‍♀️",
+  "🤦🏾‍♂️",
+  "🤦🏾",
+  "🤦🏿‍♀️",
+  "🤦🏿‍♂️",
+  "🤦🏿",
+  "🤦‍♀️",
+  "🤦‍♂️",
+  "🤦",
+  "🤧",
+  "🤨",
+  "🤩",
+  "🤪",
+  "🤫",
+  "🤬",
+  "🤭",
+  "🤮",
+  "🤯",
+  "🤰🏻",
+  "🤰🏼",
+  "🤰🏽",
+  "🤰🏾",
+  "🤰🏿",
+  "🤰",
+  "🤱🏻",
+  "🤱🏼",
+  "🤱🏽",
+  "🤱🏾",
+  "🤱🏿",
+  "🤱",
+  "🤲🏻",
+  "🤲🏼",
+  "🤲🏽",
+  "🤲🏾",
+  "🤲🏿",
+  "🤲",
+  "🤳🏻",
+  "🤳🏼",
+  "🤳🏽",
+  "🤳🏾",
+  "🤳🏿",
+  "🤳",
+  "🤴🏻",
+  "🤴🏼",
+  "🤴🏽",
+  "🤴🏾",
+  "🤴🏿",
+  "🤴",
+  "🤵🏻‍♀️",
+  "🤵🏻‍♂️",
+  "🤵🏻",
+  "🤵🏼‍♀️",
+  "🤵🏼‍♂️",
+  "🤵🏼",
+  "🤵🏽‍♀️",
+  "🤵🏽‍♂️",
+  "🤵🏽",
+  "🤵🏾‍♀️",
+  "🤵🏾‍♂️",
+  "🤵🏾",
+  "🤵🏿‍♀️",
+  "🤵🏿‍♂️",
+  "🤵🏿",
+  "🤵‍♀️",
+  "🤵‍♂️",
+  "🤵",
+  "🤶🏻",
+  "🤶🏼",
+  "🤶🏽",
+  "🤶🏾",
+  "🤶🏿",
+  "🤶",
+  "🤷🏻‍♀️",
+  "🤷🏻‍♂️",
+  "🤷🏻",
+  "🤷🏼‍♀️",
+  "🤷🏼‍♂️",
+  "🤷🏼",
+  "🤷🏽‍♀️",
+  "🤷🏽‍♂️",
+  "🤷🏽",
+  "🤷🏾‍♀️",
+  "🤷🏾‍♂️",
+  "🤷🏾",
+  "🤷🏿‍♀️",
+  "🤷🏿‍♂️",
+  "🤷🏿",
+  "🤷‍♀️",
+  "🤷‍♂️",
+  "🤷",
+  "🤸🏻‍♀️",
+  "🤸🏻‍♂️",
+  "🤸🏻",
+  "🤸🏼‍♀️",
+  "🤸🏼‍♂️",
+  "🤸🏼",
+  "🤸🏽‍♀️",
+  "🤸🏽‍♂️",
+  "🤸🏽",
+  "🤸🏾‍♀️",
+  "🤸🏾‍♂️",
+  "🤸🏾",
+  "🤸🏿‍♀️",
+  "🤸🏿‍♂️",
+  "🤸🏿",
+  "🤸‍♀️",
+  "🤸‍♂️",
+  "🤸",
+  "🤹🏻‍♀️",
+  "🤹🏻‍♂️",
+  "🤹🏻",
+  "🤹🏼‍♀️",
+  "🤹🏼‍♂️",
+  "🤹🏼",
+  "🤹🏽‍♀️",
+  "🤹🏽‍♂️",
+  "🤹🏽",
+  "🤹🏾‍♀️",
+  "🤹🏾‍♂️",
+  "🤹🏾",
+  "🤹🏿‍♀️",
+  "🤹🏿‍♂️",
+  "🤹🏿",
+  "🤹‍♀️",
+  "🤹‍♂️",
+  "🤹",
+  "🤺",
+  "🤼‍♀️",
+  "🤼‍♂️",
+  "🤼",
+  "🤽🏻‍♀️",
+  "🤽🏻‍♂️",
+  "🤽🏻",
+  "🤽🏼‍♀️",
+  "🤽🏼‍♂️",
+  "🤽🏼",
+  "🤽🏽‍♀️",
+  "🤽🏽‍♂️",
+  "🤽🏽",
+  "🤽🏾‍♀️",
+  "🤽🏾‍♂️",
+  "🤽🏾",
+  "🤽🏿‍♀️",
+  "🤽🏿‍♂️",
+  "🤽🏿",
+  "🤽‍♀️",
+  "🤽‍♂️",
+  "🤽",
+  "🤾🏻‍♀️",
+  "🤾🏻‍♂️",
+  "🤾🏻",
+  "🤾🏼‍♀️",
+  "🤾🏼‍♂️",
+  "🤾🏼",
+  "🤾🏽‍♀️",
+  "🤾🏽‍♂️",
+  "🤾🏽",
+  "🤾🏾‍♀️",
+  "🤾🏾‍♂️",
+  "🤾🏾",
+  "🤾🏿‍♀️",
+  "🤾🏿‍♂️",
+  "🤾🏿",
+  "🤾‍♀️",
+  "🤾‍♂️",
+  "🤾",
+  "🤿",
+  "🥀",
+  "🥁",
+  "🥂",
+  "🥃",
+  "🥄",
+  "🥅",
+  "🥇",
+  "🥈",
+  "🥉",
+  "🥊",
+  "🥋",
+  "🥌",
+  "🥍",
+  "🥎",
+  "🥏",
+  "🥐",
+  "🥑",
+  "🥒",
+  "🥓",
+  "🥔",
+  "🥕",
+  "🥖",
+  "🥗",
+  "🥘",
+  "🥙",
+  "🥚",
+  "🥛",
+  "🥜",
+  "🥝",
+  "🥞",
+  "🥟",
+  "🥠",
+  "🥡",
+  "🥢",
+  "🥣",
+  "🥤",
+  "🥥",
+  "🥦",
+  "🥧",
+  "🥨",
+  "🥩",
+  "🥪",
+  "🥫",
+  "🥬",
+  "🥭",
+  "🥮",
+  "🥯",
+  "🥰",
+  "🥱",
+  "🥳",
+  "🥴",
+  "🥵",
+  "🥶",
+  "🥺",
+  "🥻",
+  "🥼",
+  "🥽",
+  "🥾",
+  "🥿",
+  "🦀",
+  "🦁",
+  "🦂",
+  "🦃",
+  "🦄",
+  "🦅",
+  "🦆",
+  "🦇",
+  "🦈",
+  "🦉",
+  "🦊",
+  "🦋",
+  "🦌",
+  "🦍",
+  "🦎",
+  "🦏",
+  "🦐",
+  "🦑",
+  "🦒",
+  "🦓",
+  "🦔",
+  "🦕",
+  "🦖",
+  "🦗",
+  "🦘",
+  "🦙",
+  "🦚",
+  "🦛",
+  "🦜",
+  "🦝",
+  "🦞",
+  "🦟",
+  "🦠",
+  "🦡",
+  "🦢",
+  "🦥",
+  "🦦",
+  "🦧",
+  "🦨",
+  "🦩",
+  "🦪",
+  "🦮",
+  "🦯",
+  "🦰",
+  "🦱",
+  "🦲",
+  "🦳",
+  "🦴",
+  "🦵🏻",
+  "🦵🏼",
+  "🦵🏽",
+  "🦵🏾",
+  "🦵🏿",
+  "🦵",
+  "🦶🏻",
+  "🦶🏼",
+  "🦶🏽",
+  "🦶🏾",
+  "🦶🏿",
+  "🦶",
+  "🦷",
+  "🦸🏻‍♀️",
+  "🦸🏻‍♂️",
+  "🦸🏻",
+  "🦸🏼‍♀️",
+  "🦸🏼‍♂️",
+  "🦸🏼",
+  "🦸🏽‍♀️",
+  "🦸🏽‍♂️",
+  "🦸🏽",
+  "🦸🏾‍♀️",
+  "🦸🏾‍♂️",
+  "🦸🏾",
+  "🦸🏿‍♀️",
+  "🦸🏿‍♂️",
+  "🦸🏿",
+  "🦸‍♀️",
+  "🦸‍♂️",
+  "🦸",
+  "🦹🏻‍♀️",
+  "🦹🏻‍♂️",
+  "🦹🏻",
+  "🦹🏼‍♀️",
+  "🦹🏼‍♂️",
+  "🦹🏼",
+  "🦹🏽‍♀️",
+  "🦹🏽‍♂️",
+  "🦹🏽",
+  "🦹🏾‍♀️",
+  "🦹🏾‍♂️",
+  "🦹🏾",
+  "🦹🏿‍♀️",
+  "🦹🏿‍♂️",
+  "🦹🏿",
+  "🦹‍♀️",
+  "🦹‍♂️",
+  "🦹",
+  "🦺",
+  "🦻🏻",
+  "🦻🏼",
+  "🦻🏽",
+  "🦻🏾",
+  "🦻🏿",
+  "🦻",
+  "🦼",
+  "🦽",
+  "🦾",
+  "🦿",
+  "🧀",
+  "🧁",
+  "🧂",
+  "🧃",
+  "🧄",
+  "🧅",
+  "🧆",
+  "🧇",
+  "🧈",
+  "🧉",
+  "🧊",
+  "🧍🏻‍♀️",
+  "🧍🏻‍♂️",
+  "🧍🏻",
+  "🧍🏼‍♀️",
+  "🧍🏼‍♂️",
+  "🧍🏼",
+  "🧍🏽‍♀️",
+  "🧍🏽‍♂️",
+  "🧍🏽",
+  "🧍🏾‍♀️",
+  "🧍🏾‍♂️",
+  "🧍🏾",
+  "🧍🏿‍♀️",
+  "🧍🏿‍♂️",
+  "🧍🏿",
+  "🧍‍♀️",
+  "🧍‍♂️",
+  "🧍",
+  "🧎🏻‍♀️",
+  "🧎🏻‍♂️",
+  "🧎🏻",
+  "🧎🏼‍♀️",
+  "🧎🏼‍♂️",
+  "🧎🏼",
+  "🧎🏽‍♀️",
+  "🧎🏽‍♂️",
+  "🧎🏽",
+  "🧎🏾‍♀️",
+  "🧎🏾‍♂️",
+  "🧎🏾",
+  "🧎🏿‍♀️",
+  "🧎🏿‍♂️",
+  "🧎🏿",
+  "🧎‍♀️",
+  "🧎‍♂️",
+  "🧎",
+  "🧏🏻‍♀️",
+  "🧏🏻‍♂️",
+  "🧏🏻",
+  "🧏🏼‍♀️",
+  "🧏🏼‍♂️",
+  "🧏🏼",
+  "🧏🏽‍♀️",
+  "🧏🏽‍♂️",
+  "🧏🏽",
+  "🧏🏾‍♀️",
+  "🧏🏾‍♂️",
+  "🧏🏾",
+  "🧏🏿‍♀️",
+  "🧏🏿‍♂️",
+  "🧏🏿",
+  "🧏‍♀️",
+  "🧏‍♂️",
+  "🧏",
+  "🧐",
+  "🧑🏻‍🤝‍🧑🏻",
+  "🧑🏻",
+  "🧑🏼‍🤝‍🧑🏻",
+  "🧑🏼‍🤝‍🧑🏼",
+  "🧑🏼",
+  "🧑🏽‍🤝‍🧑🏻",
+  "🧑🏽‍🤝‍🧑🏼",
+  "🧑🏽‍🤝‍🧑🏽",
+  "🧑🏽",
+  "🧑🏾‍🤝‍🧑🏻",
+  "🧑🏾‍🤝‍🧑🏼",
+  "🧑🏾‍🤝‍🧑🏽",
+  "🧑🏾‍🤝‍🧑🏾",
+  "🧑🏾",
+  "🧑🏿‍🤝‍🧑🏻",
+  "🧑🏿‍🤝‍🧑🏼",
+  "🧑🏿‍🤝‍🧑🏽",
+  "🧑🏿‍🤝‍🧑🏾",
+  "🧑🏿‍🤝‍🧑🏿",
+  "🧑🏿",
+  "🧑‍🤝‍🧑",
+  "🧑",
+  "🧒🏻",
+  "🧒🏼",
+  "🧒🏽",
+  "🧒🏾",
+  "🧒🏿",
+  "🧒",
+  "🧓🏻",
+  "🧓🏼",
+  "🧓🏽",
+  "🧓🏾",
+  "🧓🏿",
+  "🧓",
+  "🧔🏻",
+  "🧔🏼",
+  "🧔🏽",
+  "🧔🏾",
+  "🧔🏿",
+  "🧔",
+  "🧕🏻",
+  "🧕🏼",
+  "🧕🏽",
+  "🧕🏾",
+  "🧕🏿",
+  "🧕",
+  "🧖🏻‍♀️",
+  "🧖🏻‍♂️",
+  "🧖🏻",
+  "🧖🏼‍♀️",
+  "🧖🏼‍♂️",
+  "🧖🏼",
+  "🧖🏽‍♀️",
+  "🧖🏽‍♂️",
+  "🧖🏽",
+  "🧖🏾‍♀️",
+  "🧖🏾‍♂️",
+  "🧖🏾",
+  "🧖🏿‍♀️",
+  "🧖🏿‍♂️",
+  "🧖🏿",
+  "🧖‍♀️",
+  "🧖‍♂️",
+  "🧖",
+  "🧗🏻‍♀️",
+  "🧗🏻‍♂️",
+  "🧗🏻",
+  "🧗🏼‍♀️",
+  "🧗🏼‍♂️",
+  "🧗🏼",
+  "🧗🏽‍♀️",
+  "🧗🏽‍♂️",
+  "🧗🏽",
+  "🧗🏾‍♀️",
+  "🧗🏾‍♂️",
+  "🧗🏾",
+  "🧗🏿‍♀️",
+  "🧗🏿‍♂️",
+  "🧗🏿",
+  "🧗‍♀️",
+  "🧗‍♂️",
+  "🧗",
+  "🧘🏻‍♀️",
+  "🧘🏻‍♂️",
+  "🧘🏻",
+  "🧘🏼‍♀️",
+  "🧘🏼‍♂️",
+  "🧘🏼",
+  "🧘🏽‍♀️",
+  "🧘🏽‍♂️",
+  "🧘🏽",
+  "🧘🏾‍♀️",
+  "🧘🏾‍♂️",
+  "🧘🏾",
+  "🧘🏿‍♀️",
+  "🧘🏿‍♂️",
+  "🧘🏿",
+  "🧘‍♀️",
+  "🧘‍♂️",
+  "🧘",
+  "🧙🏻‍♀️",
+  "🧙🏻‍♂️",
+  "🧙🏻",
+  "🧙🏼‍♀️",
+  "🧙🏼‍♂️",
+  "🧙🏼",
+  "🧙🏽‍♀️",
+  "🧙🏽‍♂️",
+  "🧙🏽",
+  "🧙🏾‍♀️",
+  "🧙🏾‍♂️",
+  "🧙🏾",
+  "🧙🏿‍♀️",
+  "🧙🏿‍♂️",
+  "🧙🏿",
+  "🧙‍♀️",
+  "🧙‍♂️",
+  "🧙",
+  "🧚🏻‍♀️",
+  "🧚🏻‍♂️",
+  "🧚🏻",
+  "🧚🏼‍♀️",
+  "🧚🏼‍♂️",
+  "🧚🏼",
+  "🧚🏽‍♀️",
+  "🧚🏽‍♂️",
+  "🧚🏽",
+  "🧚🏾‍♀️",
+  "🧚🏾‍♂️",
+  "🧚🏾",
+  "🧚🏿‍♀️",
+  "🧚🏿‍♂️",
+  "🧚🏿",
+  "🧚‍♀️",
+  "🧚‍♂️",
+  "🧚",
+  "🧛🏻‍♀️",
+  "🧛🏻‍♂️",
+  "🧛🏻",
+  "🧛🏼‍♀️",
+  "🧛🏼‍♂️",
+  "🧛🏼",
+  "🧛🏽‍♀️",
+  "🧛🏽‍♂️",
+  "🧛🏽",
+  "🧛🏾‍♀️",
+  "🧛🏾‍♂️",
+  "🧛🏾",
+  "🧛🏿‍♀️",
+  "🧛🏿‍♂️",
+  "🧛🏿",
+  "🧛‍♀️",
+  "🧛‍♂️",
+  "🧛",
+  "🧜🏻‍♀️",
+  "🧜🏻‍♂️",
+  "🧜🏻",
+  "🧜🏼‍♀️",
+  "🧜🏼‍♂️",
+  "🧜🏼",
+  "🧜🏽‍♀️",
+  "🧜🏽‍♂️",
+  "🧜🏽",
+  "🧜🏾‍♀️",
+  "🧜🏾‍♂️",
+  "🧜🏾",
+  "🧜🏿‍♀️",
+  "🧜🏿‍♂️",
+  "🧜🏿",
+  "🧜‍♀️",
+  "🧜‍♂️",
+  "🧜",
+  "🧝🏻‍♀️",
+  "🧝🏻‍♂️",
+  "🧝🏻",
+  "🧝🏼‍♀️",
+  "🧝🏼‍♂️",
+  "🧝🏼",
+  "🧝🏽‍♀️",
+  "🧝🏽‍♂️",
+  "🧝🏽",
+  "🧝🏾‍♀️",
+  "🧝🏾‍♂️",
+  "🧝🏾",
+  "🧝🏿‍♀️",
+  "🧝🏿‍♂️",
+  "🧝🏿",
+  "🧝‍♀️",
+  "🧝‍♂️",
+  "🧝",
+  "🧞‍♀️",
+  "🧞‍♂️",
+  "🧞",
+  "🧟‍♀️",
+  "🧟‍♂️",
+  "🧟",
+  "🧠",
+  "🧡",
+  "🧢",
+  "🧣",
+  "🧤",
+  "🧥",
+  "🧦",
+  "🧧",
+  "🧨",
+  "🧩",
+  "🧪",
+  "🧫",
+  "🧬",
+  "🧭",
+  "🧮",
+  "🧯",
+  "🧰",
+  "🧱",
+  "🧲",
+  "🧳",
+  "🧴",
+  "🧵",
+  "🧶",
+  "🧷",
+  "🧸",
+  "🧹",
+  "🧺",
+  "🧻",
+  "🧼",
+  "🧽",
+  "🧾",
+  "🧿",
+  "🩰",
+  "🩱",
+  "🩲",
+  "🩳",
+  "🩸",
+  "🩹",
+  "🩺",
+  "🪀",
+  "🪁",
+  "🪂",
+  "🪐",
+  "🪑",
+  "🪒",
+  "🪓",
+  "🪔",
+  "🪕",
+  "‼️",
+  "⁉️",
+  "™️",
+  "ℹ️",
+  "↔️",
+  "↕️",
+  "↖️",
+  "↗️",
+  "↘️",
+  "↙️",
+  "↩️",
+  "↪️",
+  "#⃣",
+  "⌚️",
+  "⌛️",
+  "⌨️",
+  "⏏️",
+  "⏩",
+  "⏪",
+  "⏫",
+  "⏬",
+  "⏭️",
+  "⏮️",
+  "⏯️",
+  "⏰",
+  "⏱️",
+  "⏲️",
+  "⏳",
+  "⏸️",
+  "⏹️",
+  "⏺️",
+  "Ⓜ️",
+  "▪️",
+  "▫️",
+  "▶️",
+  "◀️",
+  "◻️",
+  "◼️",
+  "◽️",
+  "◾️",
+  "☀️",
+  "☁️",
+  "☂️",
+  "☃️",
+  "☄️",
+  "☎️",
+  "☑️",
+  "☔️",
+  "☕️",
+  "☘️",
+  "☝🏻",
+  "☝🏼",
+  "☝🏽",
+  "☝🏾",
+  "☝🏿",
+  "☝️",
+  "☠️",
+  "☢️",
+  "☣️",
+  "☦️",
+  "☪️",
+  "☮️",
+  "☯️",
+  "☸️",
+  "☹️",
+  "☺️",
+  "♀️",
+  "♂️",
+  "♈️",
+  "♉️",
+  "♊️",
+  "♋️",
+  "♌️",
+  "♍️",
+  "♎️",
+  "♏️",
+  "♐️",
+  "♑️",
+  "♒️",
+  "♓️",
+  "♟️",
+  "♠️",
+  "♣️",
+  "♥️",
+  "♦️",
+  "♨️",
+  "♻️",
+  "♾",
+  "♿️",
+  "⚒️",
+  "⚓️",
+  "⚔️",
+  "⚕️",
+  "⚖️",
+  "⚗️",
+  "⚙️",
+  "⚛️",
+  "⚜️",
+  "⚠️",
+  "⚡️",
+  "⚪️",
+  "⚫️",
+  "⚰️",
+  "⚱️",
+  "⚽️",
+  "⚾️",
+  "⛄️",
+  "⛅️",
+  "⛈️",
+  "⛎",
+  "⛏️",
+  "⛑️",
+  "⛓️",
+  "⛔️",
+  "⛩️",
+  "⛪️",
+  "⛰️",
+  "⛱️",
+  "⛲️",
+  "⛳️",
+  "⛴️",
+  "⛵️",
+  "⛷🏻",
+  "⛷🏼",
+  "⛷🏽",
+  "⛷🏾",
+  "⛷🏿",
+  "⛷️",
+  "⛸️",
+  "⛹🏻‍♀️",
+  "⛹🏻‍♂️",
+  "⛹🏻",
+  "⛹🏼‍♀️",
+  "⛹🏼‍♂️",
+  "⛹🏼",
+  "⛹🏽‍♀️",
+  "⛹🏽‍♂️",
+  "⛹🏽",
+  "⛹🏾‍♀️",
+  "⛹🏾‍♂️",
+  "⛹🏾",
+  "⛹🏿‍♀️",
+  "⛹🏿‍♂️",
+  "⛹🏿",
+  "⛹️‍♀️",
+  "⛹️‍♂️",
+  "⛹️",
+  "⛺️",
+  "⛽️",
+  "✂️",
+  "✅",
+  "✈️",
+  "✉️",
+  "✊🏻",
+  "✊🏼",
+  "✊🏽",
+  "✊🏾",
+  "✊🏿",
+  "✊",
+  "✋🏻",
+  "✋🏼",
+  "✋🏽",
+  "✋🏾",
+  "✋🏿",
+  "✋",
+  "✌🏻",
+  "✌🏼",
+  "✌🏽",
+  "✌🏾",
+  "✌🏿",
+  "✌️",
+  "✍🏻",
+  "✍🏼",
+  "✍🏽",
+  "✍🏾",
+  "✍🏿",
+  "✍️",
+  "✏️",
+  "✒️",
+  "✔️",
+  "✖️",
+  "✝️",
+  "✡️",
+  "✨",
+  "✳️",
+  "✴️",
+  "❄️",
+  "❇️",
+  "❌",
+  "❎",
+  "❓",
+  "❔",
+  "❕",
+  "❗️",
+  "❣️",
+  "❤️",
+  "➕",
+  "➖",
+  "➗",
+  "➡️",
+  "➰",
+  "➿",
+  "⤴️",
+  "⤵️",
+  "*⃣",
+  "⬅️",
+  "⬆️",
+  "⬇️",
+  "⬛️",
+  "⬜️",
+  "⭐️",
+  "⭕️",
+  "0⃣",
+  "〰️",
+  "〽️",
+  "1⃣",
+  "2⃣",
+  "㊗️",
+  "㊙️",
+  "3⃣",
+  "4⃣",
+  "5⃣",
+  "6⃣",
+  "7⃣",
+  "8⃣",
+  "9⃣",
+  "©️",
+  "®️",
+  ""
+]
+
+/***/ }),
+
+/***/ 961:
+/***/ ((module) => {
+
+"use strict";
+
+
+function getCurrentRequest(loaderContext) {
+  if (loaderContext.currentRequest) {
+    return loaderContext.currentRequest;
+  }
+
+  const request = loaderContext.loaders
+    .slice(loaderContext.loaderIndex)
+    .map((obj) => obj.request)
+    .concat([loaderContext.resource]);
+
+  return request.join('!');
+}
+
+module.exports = getCurrentRequest;
+
+
+/***/ }),
+
+/***/ 885:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const baseEncodeTables = {
+  26: 'abcdefghijklmnopqrstuvwxyz',
+  32: '123456789abcdefghjkmnpqrstuvwxyz', // no 0lio
+  36: '0123456789abcdefghijklmnopqrstuvwxyz',
+  49: 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ', // no lIO
+  52: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  58: '123456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ', // no 0lIO
+  62: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  64: '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_',
+};
+
+function encodeBufferToBase(buffer, base) {
+  const encodeTable = baseEncodeTables[base];
+  if (!encodeTable) {
+    throw new Error('Unknown encoding base' + base);
+  }
+
+  const readLength = buffer.length;
+  const Big = __nccwpck_require__(620);
+
+  Big.RM = Big.DP = 0;
+  let b = new Big(0);
+
+  for (let i = readLength - 1; i >= 0; i--) {
+    b = b.times(256).plus(buffer[i]);
+  }
+
+  let output = '';
+  while (b.gt(0)) {
+    output = encodeTable[b.mod(base)] + output;
+    b = b.div(base);
+  }
+
+  Big.DP = 20;
+  Big.RM = 1;
+
+  return output;
+}
+
+let createMd4 = undefined;
+let BatchedHash = undefined;
+
+function getHashDigest(buffer, hashType, digestType, maxLength) {
+  hashType = hashType || 'md4';
+  maxLength = maxLength || 9999;
+
+  let hash;
+
+  try {
+    hash = (__nccwpck_require__(113).createHash)(hashType);
+  } catch (error) {
+    if (error.code === 'ERR_OSSL_EVP_UNSUPPORTED' && hashType === 'md4') {
+      if (createMd4 === undefined) {
+        createMd4 = __nccwpck_require__(591);
+
+        if (BatchedHash === undefined) {
+          BatchedHash = __nccwpck_require__(315);
+        }
+      }
+
+      hash = new BatchedHash(createMd4());
+    }
+
+    if (!hash) {
+      throw error;
+    }
+  }
+
+  hash.update(buffer);
+
+  if (
+    digestType === 'base26' ||
+    digestType === 'base32' ||
+    digestType === 'base36' ||
+    digestType === 'base49' ||
+    digestType === 'base52' ||
+    digestType === 'base58' ||
+    digestType === 'base62'
+  ) {
+    return encodeBufferToBase(hash.digest(), digestType.substr(4)).substr(
+      0,
+      maxLength
+    );
+  } else {
+    return hash.digest(digestType || 'hex').substr(0, maxLength);
+  }
+}
+
+module.exports = getHashDigest;
+
+
+/***/ }),
+
+/***/ 826:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const parseQuery = __nccwpck_require__(159);
+
+function getOptions(loaderContext) {
+  const query = loaderContext.query;
+
+  if (typeof query === 'string' && query !== '') {
+    return parseQuery(loaderContext.query);
+  }
+
+  if (!query || typeof query !== 'object') {
+    // Not object-like queries are not supported.
+    return {};
+  }
+
+  return query;
+}
+
+module.exports = getOptions;
+
+
+/***/ }),
+
+/***/ 361:
+/***/ ((module) => {
+
+"use strict";
+
+
+function getRemainingRequest(loaderContext) {
+  if (loaderContext.remainingRequest) {
+    return loaderContext.remainingRequest;
+  }
+
+  const request = loaderContext.loaders
+    .slice(loaderContext.loaderIndex + 1)
+    .map((obj) => obj.request)
+    .concat([loaderContext.resource]);
+
+  return request.join('!');
+}
+
+module.exports = getRemainingRequest;
+
+
+/***/ }),
+
+/***/ 315:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+const MAX_SHORT_STRING = (__nccwpck_require__(93).MAX_SHORT_STRING);
+
+class BatchedHash {
+  constructor(hash) {
+    this.string = undefined;
+    this.encoding = undefined;
+    this.hash = hash;
+  }
+
+  /**
+   * Update hash {@link https://nodejs.org/api/crypto.html#crypto_hash_update_data_inputencoding}
+   * @param {string|Buffer} data data
+   * @param {string=} inputEncoding data encoding
+   * @returns {this} updated hash
+   */
+  update(data, inputEncoding) {
+    if (this.string !== undefined) {
+      if (
+        typeof data === 'string' &&
+        inputEncoding === this.encoding &&
+        this.string.length + data.length < MAX_SHORT_STRING
+      ) {
+        this.string += data;
+
+        return this;
+      }
+
+      this.hash.update(this.string, this.encoding);
+      this.string = undefined;
+    }
+
+    if (typeof data === 'string') {
+      if (
+        data.length < MAX_SHORT_STRING &&
+        // base64 encoding is not valid since it may contain padding chars
+        (!inputEncoding || !inputEncoding.startsWith('ba'))
+      ) {
+        this.string = data;
+        this.encoding = inputEncoding;
+      } else {
+        this.hash.update(data, inputEncoding);
+      }
+    } else {
+      this.hash.update(data);
+    }
+
+    return this;
+  }
+
+  /**
+   * Calculates the digest {@link https://nodejs.org/api/crypto.html#crypto_hash_digest_encoding}
+   * @param {string=} encoding encoding of the return value
+   * @returns {string|Buffer} digest
+   */
+  digest(encoding) {
+    if (this.string !== undefined) {
+      this.hash.update(this.string, this.encoding);
+    }
+
+    return this.hash.digest(encoding);
+  }
+}
+
+module.exports = BatchedHash;
+
+
+/***/ }),
+
+/***/ 591:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+/*
+	MIT License http://www.opensource.org/licenses/mit-license.php
+	Author Tobias Koppers @sokra
+*/
+
+
+
+const create = __nccwpck_require__(93);
+
+//#region wasm code: md4 (../../../assembly/hash/md4.asm.ts) --initialMemory 1
+const md4 = new WebAssembly.Module(
+  Buffer.from(
+    // 2150 bytes
+    'AGFzbQEAAAABCAJgAX8AYAAAAwUEAQAAAAUDAQABBhoFfwFBAAt/AUEAC38BQQALfwFBAAt/AUEACwciBARpbml0AAAGdXBkYXRlAAIFZmluYWwAAwZtZW1vcnkCAAqFEAQmAEGBxpS6BiQBQYnXtv5+JAJB/rnrxXkkA0H2qMmBASQEQQAkAAvMCgEYfyMBIQojAiEGIwMhByMEIQgDQCAAIAVLBEAgBSgCCCINIAcgBiAFKAIEIgsgCCAHIAUoAgAiDCAKIAggBiAHIAhzcXNqakEDdyIDIAYgB3Nxc2pqQQd3IgEgAyAGc3FzampBC3chAiAFKAIUIg8gASACIAUoAhAiCSADIAEgBSgCDCIOIAYgAyACIAEgA3Nxc2pqQRN3IgQgASACc3FzampBA3ciAyACIARzcXNqakEHdyEBIAUoAiAiEiADIAEgBSgCHCIRIAQgAyAFKAIYIhAgAiAEIAEgAyAEc3FzampBC3ciAiABIANzcXNqakETdyIEIAEgAnNxc2pqQQN3IQMgBSgCLCIVIAQgAyAFKAIoIhQgAiAEIAUoAiQiEyABIAIgAyACIARzcXNqakEHdyIBIAMgBHNxc2pqQQt3IgIgASADc3FzampBE3chBCAPIBAgCSAVIBQgEyAFKAI4IhYgAiAEIAUoAjQiFyABIAIgBSgCMCIYIAMgASAEIAEgAnNxc2pqQQN3IgEgAiAEc3FzampBB3ciAiABIARzcXNqakELdyIDIAkgAiAMIAEgBSgCPCIJIAQgASADIAEgAnNxc2pqQRN3IgEgAiADcnEgAiADcXJqakGZ84nUBWpBA3ciAiABIANycSABIANxcmpqQZnzidQFakEFdyIEIAEgAnJxIAEgAnFyaiASakGZ84nUBWpBCXciAyAPIAQgCyACIBggASADIAIgBHJxIAIgBHFyampBmfOJ1AVqQQ13IgEgAyAEcnEgAyAEcXJqakGZ84nUBWpBA3ciAiABIANycSABIANxcmpqQZnzidQFakEFdyIEIAEgAnJxIAEgAnFyampBmfOJ1AVqQQl3IgMgECAEIAIgFyABIAMgAiAEcnEgAiAEcXJqakGZ84nUBWpBDXciASADIARycSADIARxcmogDWpBmfOJ1AVqQQN3IgIgASADcnEgASADcXJqakGZ84nUBWpBBXciBCABIAJycSABIAJxcmpqQZnzidQFakEJdyIDIBEgBCAOIAIgFiABIAMgAiAEcnEgAiAEcXJqakGZ84nUBWpBDXciASADIARycSADIARxcmpqQZnzidQFakEDdyICIAEgA3JxIAEgA3FyampBmfOJ1AVqQQV3IgQgASACcnEgASACcXJqakGZ84nUBWpBCXciAyAMIAIgAyAJIAEgAyACIARycSACIARxcmpqQZnzidQFakENdyIBcyAEc2pqQaHX5/YGakEDdyICIAQgASACcyADc2ogEmpBodfn9gZqQQl3IgRzIAFzampBodfn9gZqQQt3IgMgAiADIBggASADIARzIAJzampBodfn9gZqQQ93IgFzIARzaiANakGh1+f2BmpBA3ciAiAUIAQgASACcyADc2pqQaHX5/YGakEJdyIEcyABc2pqQaHX5/YGakELdyIDIAsgAiADIBYgASADIARzIAJzampBodfn9gZqQQ93IgFzIARzampBodfn9gZqQQN3IgIgEyAEIAEgAnMgA3NqakGh1+f2BmpBCXciBHMgAXNqakGh1+f2BmpBC3chAyAKIA4gAiADIBcgASADIARzIAJzampBodfn9gZqQQ93IgFzIARzampBodfn9gZqQQN3IgJqIQogBiAJIAEgESADIAIgFSAEIAEgAnMgA3NqakGh1+f2BmpBCXciBHMgAXNqakGh1+f2BmpBC3ciAyAEcyACc2pqQaHX5/YGakEPd2ohBiADIAdqIQcgBCAIaiEIIAVBQGshBQwBCwsgCiQBIAYkAiAHJAMgCCQECw0AIAAQASMAIABqJAAL/wQCA38BfiMAIABqrUIDhiEEIABByABqQUBxIgJBCGshAyAAIgFBAWohACABQYABOgAAA0AgACACSUEAIABBB3EbBEAgAEEAOgAAIABBAWohAAwBCwsDQCAAIAJJBEAgAEIANwMAIABBCGohAAwBCwsgAyAENwMAIAIQAUEAIwGtIgRC//8DgyAEQoCA/P8Pg0IQhoQiBEL/gYCA8B+DIARCgP6DgIDgP4NCCIaEIgRCj4C8gPCBwAeDQgiGIARC8IHAh4CegPgAg0IEiIQiBEKGjJiw4MCBgwZ8QgSIQoGChIiQoMCAAYNCJ34gBEKw4MCBg4aMmDCEfDcDAEEIIwKtIgRC//8DgyAEQoCA/P8Pg0IQhoQiBEL/gYCA8B+DIARCgP6DgIDgP4NCCIaEIgRCj4C8gPCBwAeDQgiGIARC8IHAh4CegPgAg0IEiIQiBEKGjJiw4MCBgwZ8QgSIQoGChIiQoMCAAYNCJ34gBEKw4MCBg4aMmDCEfDcDAEEQIwOtIgRC//8DgyAEQoCA/P8Pg0IQhoQiBEL/gYCA8B+DIARCgP6DgIDgP4NCCIaEIgRCj4C8gPCBwAeDQgiGIARC8IHAh4CegPgAg0IEiIQiBEKGjJiw4MCBgwZ8QgSIQoGChIiQoMCAAYNCJ34gBEKw4MCBg4aMmDCEfDcDAEEYIwStIgRC//8DgyAEQoCA/P8Pg0IQhoQiBEL/gYCA8B+DIARCgP6DgIDgP4NCCIaEIgRCj4C8gPCBwAeDQgiGIARC8IHAh4CegPgAg0IEiIQiBEKGjJiw4MCBgwZ8QgSIQoGChIiQoMCAAYNCJ34gBEKw4MCBg4aMmDCEfDcDAAs=',
+    'base64'
+  )
+);
+//#endregion
+
+module.exports = create.bind(null, md4, [], 64, 32);
+
+
+/***/ }),
+
+/***/ 93:
+/***/ ((module) => {
+
+"use strict";
+/*
+	MIT License http://www.opensource.org/licenses/mit-license.php
+	Author Tobias Koppers @sokra
+*/
+
+
+
+// 65536 is the size of a wasm memory page
+// 64 is the maximum chunk size for every possible wasm hash implementation
+// 4 is the maximum number of bytes per char for string encoding (max is utf-8)
+// ~3 makes sure that it's always a block of 4 chars, so avoid partially encoded bytes for base64
+const MAX_SHORT_STRING = Math.floor((65536 - 64) / 4) & ~3;
+
+class WasmHash {
+  /**
+   * @param {WebAssembly.Instance} instance wasm instance
+   * @param {WebAssembly.Instance[]} instancesPool pool of instances
+   * @param {number} chunkSize size of data chunks passed to wasm
+   * @param {number} digestSize size of digest returned by wasm
+   */
+  constructor(instance, instancesPool, chunkSize, digestSize) {
+    const exports = /** @type {any} */ (instance.exports);
+
+    exports.init();
+
+    this.exports = exports;
+    this.mem = Buffer.from(exports.memory.buffer, 0, 65536);
+    this.buffered = 0;
+    this.instancesPool = instancesPool;
+    this.chunkSize = chunkSize;
+    this.digestSize = digestSize;
+  }
+
+  reset() {
+    this.buffered = 0;
+    this.exports.init();
+  }
+
+  /**
+   * @param {Buffer | string} data data
+   * @param {BufferEncoding=} encoding encoding
+   * @returns {this} itself
+   */
+  update(data, encoding) {
+    if (typeof data === 'string') {
+      while (data.length > MAX_SHORT_STRING) {
+        this._updateWithShortString(data.slice(0, MAX_SHORT_STRING), encoding);
+        data = data.slice(MAX_SHORT_STRING);
+      }
+
+      this._updateWithShortString(data, encoding);
+
+      return this;
+    }
+
+    this._updateWithBuffer(data);
+
+    return this;
+  }
+
+  /**
+   * @param {string} data data
+   * @param {BufferEncoding=} encoding encoding
+   * @returns {void}
+   */
+  _updateWithShortString(data, encoding) {
+    const { exports, buffered, mem, chunkSize } = this;
+
+    let endPos;
+
+    if (data.length < 70) {
+      if (!encoding || encoding === 'utf-8' || encoding === 'utf8') {
+        endPos = buffered;
+        for (let i = 0; i < data.length; i++) {
+          const cc = data.charCodeAt(i);
+
+          if (cc < 0x80) {
+            mem[endPos++] = cc;
+          } else if (cc < 0x800) {
+            mem[endPos] = (cc >> 6) | 0xc0;
+            mem[endPos + 1] = (cc & 0x3f) | 0x80;
+            endPos += 2;
+          } else {
+            // bail-out for weird chars
+            endPos += mem.write(data.slice(i), endPos, encoding);
+            break;
+          }
+        }
+      } else if (encoding === 'latin1') {
+        endPos = buffered;
+
+        for (let i = 0; i < data.length; i++) {
+          const cc = data.charCodeAt(i);
+
+          mem[endPos++] = cc;
+        }
+      } else {
+        endPos = buffered + mem.write(data, buffered, encoding);
+      }
+    } else {
+      endPos = buffered + mem.write(data, buffered, encoding);
+    }
+
+    if (endPos < chunkSize) {
+      this.buffered = endPos;
+    } else {
+      const l = endPos & ~(this.chunkSize - 1);
+
+      exports.update(l);
+
+      const newBuffered = endPos - l;
+
+      this.buffered = newBuffered;
+
+      if (newBuffered > 0) {
+        mem.copyWithin(0, l, endPos);
+      }
+    }
+  }
+
+  /**
+   * @param {Buffer} data data
+   * @returns {void}
+   */
+  _updateWithBuffer(data) {
+    const { exports, buffered, mem } = this;
+    const length = data.length;
+
+    if (buffered + length < this.chunkSize) {
+      data.copy(mem, buffered, 0, length);
+
+      this.buffered += length;
+    } else {
+      const l = (buffered + length) & ~(this.chunkSize - 1);
+
+      if (l > 65536) {
+        let i = 65536 - buffered;
+
+        data.copy(mem, buffered, 0, i);
+        exports.update(65536);
+
+        const stop = l - buffered - 65536;
+
+        while (i < stop) {
+          data.copy(mem, 0, i, i + 65536);
+          exports.update(65536);
+          i += 65536;
+        }
+
+        data.copy(mem, 0, i, l - buffered);
+
+        exports.update(l - buffered - i);
+      } else {
+        data.copy(mem, buffered, 0, l - buffered);
+
+        exports.update(l);
+      }
+
+      const newBuffered = length + buffered - l;
+
+      this.buffered = newBuffered;
+
+      if (newBuffered > 0) {
+        data.copy(mem, 0, length - newBuffered, length);
+      }
+    }
+  }
+
+  digest(type) {
+    const { exports, buffered, mem, digestSize } = this;
+
+    exports.final(buffered);
+
+    this.instancesPool.push(this);
+
+    const hex = mem.toString('latin1', 0, digestSize);
+
+    if (type === 'hex') {
+      return hex;
+    }
+
+    if (type === 'binary' || !type) {
+      return Buffer.from(hex, 'hex');
+    }
+
+    return Buffer.from(hex, 'hex').toString(type);
+  }
+}
+
+const create = (wasmModule, instancesPool, chunkSize, digestSize) => {
+  if (instancesPool.length > 0) {
+    const old = instancesPool.pop();
+
+    old.reset();
+
+    return old;
+  } else {
+    return new WasmHash(
+      new WebAssembly.Instance(wasmModule),
+      instancesPool,
+      chunkSize,
+      digestSize
+    );
+  }
+};
+
+module.exports = create;
+module.exports.MAX_SHORT_STRING = MAX_SHORT_STRING;
+
+
+/***/ }),
+
+/***/ 822:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const path = __nccwpck_require__(17);
+const emojisList = __nccwpck_require__(585);
+const getHashDigest = __nccwpck_require__(885);
+
+const emojiRegex = /[\uD800-\uDFFF]./;
+const emojiList = emojisList.filter((emoji) => emojiRegex.test(emoji));
+const emojiCache = {};
+
+function encodeStringToEmoji(content, length) {
+  if (emojiCache[content]) {
+    return emojiCache[content];
+  }
+
+  length = length || 1;
+
+  const emojis = [];
+
+  do {
+    if (!emojiList.length) {
+      throw new Error('Ran out of emoji');
+    }
+
+    const index = Math.floor(Math.random() * emojiList.length);
+
+    emojis.push(emojiList[index]);
+    emojiList.splice(index, 1);
+  } while (--length > 0);
+
+  const emojiEncoding = emojis.join('');
+
+  emojiCache[content] = emojiEncoding;
+
+  return emojiEncoding;
+}
+
+function interpolateName(loaderContext, name, options) {
+  let filename;
+
+  const hasQuery =
+    loaderContext.resourceQuery && loaderContext.resourceQuery.length > 1;
+
+  if (typeof name === 'function') {
+    filename = name(
+      loaderContext.resourcePath,
+      hasQuery ? loaderContext.resourceQuery : undefined
+    );
+  } else {
+    filename = name || '[hash].[ext]';
+  }
+
+  const context = options.context;
+  const content = options.content;
+  const regExp = options.regExp;
+
+  let ext = 'bin';
+  let basename = 'file';
+  let directory = '';
+  let folder = '';
+  let query = '';
+
+  if (loaderContext.resourcePath) {
+    const parsed = path.parse(loaderContext.resourcePath);
+    let resourcePath = loaderContext.resourcePath;
+
+    if (parsed.ext) {
+      ext = parsed.ext.substr(1);
+    }
+
+    if (parsed.dir) {
+      basename = parsed.name;
+      resourcePath = parsed.dir + path.sep;
+    }
+
+    if (typeof context !== 'undefined') {
+      directory = path
+        .relative(context, resourcePath + '_')
+        .replace(/\\/g, '/')
+        .replace(/\.\.(\/)?/g, '_$1');
+      directory = directory.substr(0, directory.length - 1);
+    } else {
+      directory = resourcePath.replace(/\\/g, '/').replace(/\.\.(\/)?/g, '_$1');
+    }
+
+    if (directory.length === 1) {
+      directory = '';
+    } else if (directory.length > 1) {
+      folder = path.basename(directory);
+    }
+  }
+
+  if (loaderContext.resourceQuery && loaderContext.resourceQuery.length > 1) {
+    query = loaderContext.resourceQuery;
+
+    const hashIdx = query.indexOf('#');
+
+    if (hashIdx >= 0) {
+      query = query.substr(0, hashIdx);
+    }
+  }
+
+  let url = filename;
+
+  if (content) {
+    // Match hash template
+    url = url
+      // `hash` and `contenthash` are same in `loader-utils` context
+      // let's keep `hash` for backward compatibility
+      .replace(
+        /\[(?:([^[:\]]+):)?(?:hash|contenthash)(?::([a-z]+\d*))?(?::(\d+))?\]/gi,
+        (all, hashType, digestType, maxLength) =>
+          getHashDigest(content, hashType, digestType, parseInt(maxLength, 10))
+      )
+      .replace(/\[emoji(?::(\d+))?\]/gi, (all, length) =>
+        encodeStringToEmoji(content, parseInt(length, 10))
+      );
+  }
+
+  url = url
+    .replace(/\[ext\]/gi, () => ext)
+    .replace(/\[name\]/gi, () => basename)
+    .replace(/\[path\]/gi, () => directory)
+    .replace(/\[folder\]/gi, () => folder)
+    .replace(/\[query\]/gi, () => query);
+
+  if (regExp && loaderContext.resourcePath) {
+    const match = loaderContext.resourcePath.match(new RegExp(regExp));
+
+    match &&
+      match.forEach((matched, i) => {
+        url = url.replace(new RegExp('\\[' + i + '\\]', 'ig'), matched);
+      });
+  }
+
+  if (
+    typeof loaderContext.options === 'object' &&
+    typeof loaderContext.options.customInterpolateName === 'function'
+  ) {
+    url = loaderContext.options.customInterpolateName.call(
+      loaderContext,
+      url,
+      name,
+      options
+    );
+  }
+
+  return url;
+}
+
+module.exports = interpolateName;
+
+
+/***/ }),
+
+/***/ 721:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const path = __nccwpck_require__(17);
+
+function isUrlRequest(url, root) {
+  // An URL is not an request if
+
+  // 1. It's an absolute url and it is not `windows` path like `C:\dir\file`
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url) && !path.win32.isAbsolute(url)) {
+    return false;
+  }
+
+  // 2. It's a protocol-relative
+  if (/^\/\//.test(url)) {
+    return false;
+  }
+
+  // 3. It's some kind of url for a template
+  if (/^[{}[\]#*;,'§$%&(=?`´^°<>]/.test(url)) {
+    return false;
+  }
+
+  // 4. It's also not an request if root isn't set and it's a root-relative url
+  if ((root === undefined || root === false) && /^\//.test(url)) {
+    return false;
+  }
+
+  return true;
+}
+
+module.exports = isUrlRequest;
+
+
+/***/ }),
+
+/***/ 159:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const JSON5 = __nccwpck_require__(278);
+
+const specialValues = {
+  null: null,
+  true: true,
+  false: false,
+};
+
+function parseQuery(query) {
+  if (query.substr(0, 1) !== '?') {
+    throw new Error(
+      "A valid query string passed to parseQuery should begin with '?'"
+    );
+  }
+
+  query = query.substr(1);
+
+  if (!query) {
+    return {};
+  }
+
+  if (query.substr(0, 1) === '{' && query.substr(-1) === '}') {
+    return JSON5.parse(query);
+  }
+
+  const queryArgs = query.split(/[,&]/g);
+  const result = Object.create(null);
+
+  queryArgs.forEach((arg) => {
+    const idx = arg.indexOf('=');
+
+    if (idx >= 0) {
+      let name = arg.substr(0, idx);
+      let value = decodeURIComponent(arg.substr(idx + 1));
+
+      // eslint-disable-next-line no-prototype-builtins
+      if (specialValues.hasOwnProperty(value)) {
+        value = specialValues[value];
+      }
+
+      if (name.substr(-2) === '[]') {
+        name = decodeURIComponent(name.substr(0, name.length - 2));
+
+        if (!Array.isArray(result[name])) {
+          result[name] = [];
+        }
+
+        result[name].push(value);
+      } else {
+        name = decodeURIComponent(name);
+        result[name] = value;
+      }
+    } else {
+      if (arg.substr(0, 1) === '-') {
+        result[decodeURIComponent(arg.substr(1))] = false;
+      } else if (arg.substr(0, 1) === '+') {
+        result[decodeURIComponent(arg.substr(1))] = true;
+      } else {
+        result[decodeURIComponent(arg)] = true;
+      }
+    }
+  });
+
+  return result;
+}
+
+module.exports = parseQuery;
+
+
+/***/ }),
+
+/***/ 251:
+/***/ ((module) => {
+
+"use strict";
+
+
+function parseString(str) {
+  try {
+    if (str[0] === '"') {
+      return JSON.parse(str);
+    }
+
+    if (str[0] === "'" && str.substr(str.length - 1) === "'") {
+      return parseString(
+        str
+          .replace(/\\.|"/g, (x) => (x === '"' ? '\\"' : x))
+          .replace(/^'|'$/g, '"')
+      );
+    }
+
+    return JSON.parse('"' + str + '"');
+  } catch (e) {
+    return str;
+  }
+}
+
+module.exports = parseString;
+
+
+/***/ }),
+
+/***/ 386:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const path = __nccwpck_require__(17);
+
+const matchRelativePath = /^\.\.?[/\\]/;
+
+function isAbsolutePath(str) {
+  return path.posix.isAbsolute(str) || path.win32.isAbsolute(str);
+}
+
+function isRelativePath(str) {
+  return matchRelativePath.test(str);
+}
+
+function stringifyRequest(loaderContext, request) {
+  const splitted = request.split('!');
+  const context =
+    loaderContext.context ||
+    (loaderContext.options && loaderContext.options.context);
+
+  return JSON.stringify(
+    splitted
+      .map((part) => {
+        // First, separate singlePath from query, because the query might contain paths again
+        const splittedPart = part.match(/^(.*?)(\?.*)/);
+        const query = splittedPart ? splittedPart[2] : '';
+        let singlePath = splittedPart ? splittedPart[1] : part;
+
+        if (isAbsolutePath(singlePath) && context) {
+          singlePath = path.relative(context, singlePath);
+
+          if (isAbsolutePath(singlePath)) {
+            // If singlePath still matches an absolute path, singlePath was on a different drive than context.
+            // In this case, we leave the path platform-specific without replacing any separators.
+            // @see https://github.com/webpack/loader-utils/pull/14
+            return singlePath + query;
+          }
+
+          if (isRelativePath(singlePath) === false) {
+            // Ensure that the relative path starts at least with ./ otherwise it would be a request into the modules directory (like node_modules).
+            singlePath = './' + singlePath;
+          }
+        }
+
+        return singlePath.replace(/\\/g, '/') + query;
+      })
+      .join('!')
+  );
+}
+
+module.exports = stringifyRequest;
+
+
+/***/ }),
+
+/***/ 767:
+/***/ ((module) => {
+
+"use strict";
+
+
+// we can't use path.win32.isAbsolute because it also matches paths starting with a forward slash
+const matchNativeWin32Path = /^[A-Z]:[/\\]|^\\\\/i;
+
+function urlToRequest(url, root) {
+  // Do not rewrite an empty url
+  if (url === '') {
+    return '';
+  }
+
+  const moduleRequestRegex = /^[^?]*~/;
+  let request;
+
+  if (matchNativeWin32Path.test(url)) {
+    // absolute windows path, keep it
+    request = url;
+  } else if (root !== undefined && root !== false && /^\//.test(url)) {
+    // if root is set and the url is root-relative
+    switch (typeof root) {
+      // 1. root is a string: root is prefixed to the url
+      case 'string':
+        // special case: `~` roots convert to module request
+        if (moduleRequestRegex.test(root)) {
+          request = root.replace(/([^~/])$/, '$1/') + url.slice(1);
+        } else {
+          request = root + url;
+        }
+        break;
+      // 2. root is `true`: absolute paths are allowed
+      //    *nix only, windows-style absolute paths are always allowed as they doesn't start with a `/`
+      case 'boolean':
+        request = url;
+        break;
+      default:
+        throw new Error(
+          "Unexpected parameters to loader-utils 'urlToRequest': url = " +
+            url +
+            ', root = ' +
+            root +
+            '.'
+        );
+    }
+  } else if (/^\.\.?\//.test(url)) {
+    // A relative url stays
+    request = url;
+  } else {
+    // every other url is threaded like a relative url
+    request = './' + url;
+  }
+
+  // A `~` makes the url an module
+  if (moduleRequestRegex.test(request)) {
+    request = request.replace(moduleRequestRegex, '');
+  }
+
+  return request;
+}
+
+module.exports = urlToRequest;
+
+
+/***/ }),
+
+/***/ 278:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("../json5");
+
+/***/ }),
+
+/***/ 113:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("crypto");
+
+/***/ }),
+
+/***/ 17:
+/***/ ((module) => {
+
+"use strict";
+module.exports = require("path");
+
+/***/ })
+
+/******/ 	});
+/************************************************************************/
+/******/ 	// The module cache
+/******/ 	var __webpack_module_cache__ = {};
+/******/ 	
+/******/ 	// The require function
+/******/ 	function __nccwpck_require__(moduleId) {
+/******/ 		// Check if module is in cache
+/******/ 		var cachedModule = __webpack_module_cache__[moduleId];
+/******/ 		if (cachedModule !== undefined) {
+/******/ 			return cachedModule.exports;
+/******/ 		}
+/******/ 		// Create a new module (and put it into the cache)
+/******/ 		var module = __webpack_module_cache__[moduleId] = {
+/******/ 			// no module.id needed
+/******/ 			// no module.loaded needed
+/******/ 			exports: {}
+/******/ 		};
+/******/ 	
+/******/ 		// Execute the module function
+/******/ 		var threw = true;
+/******/ 		try {
+/******/ 			__webpack_modules__[moduleId].call(module.exports, module, module.exports, __nccwpck_require__);
+/******/ 			threw = false;
+/******/ 		} finally {
+/******/ 			if(threw) delete __webpack_module_cache__[moduleId];
+/******/ 		}
+/******/ 	
+/******/ 		// Return the exports of the module
+/******/ 		return module.exports;
+/******/ 	}
+/******/ 	
+/************************************************************************/
+/******/ 	/* webpack/runtime/compat */
+/******/ 	
+/******/ 	if (typeof __nccwpck_require__ !== 'undefined') __nccwpck_require__.ab = __dirname + "/";
+/******/ 	
+/************************************************************************/
+var __webpack_exports__ = {};
+// This entry need to be wrapped in an IIFE because it need to be in strict mode.
+(() => {
+"use strict";
+var exports = __webpack_exports__;
+
+
+const getOptions = __nccwpck_require__(826);
+const parseQuery = __nccwpck_require__(159);
+const stringifyRequest = __nccwpck_require__(386);
+const getRemainingRequest = __nccwpck_require__(361);
+const getCurrentRequest = __nccwpck_require__(961);
+const isUrlRequest = __nccwpck_require__(721);
+const urlToRequest = __nccwpck_require__(767);
+const parseString = __nccwpck_require__(251);
+const getHashDigest = __nccwpck_require__(885);
+const interpolateName = __nccwpck_require__(822);
+
+exports.getOptions = getOptions;
+exports.parseQuery = parseQuery;
+exports.stringifyRequest = stringifyRequest;
+exports.getRemainingRequest = getRemainingRequest;
+exports.getCurrentRequest = getCurrentRequest;
+exports.isUrlRequest = isUrlRequest;
+exports.urlToRequest = urlToRequest;
+exports.parseString = parseString;
+exports.getHashDigest = getHashDigest;
+exports.interpolateName = interpolateName;
+
+})();
+
+module.exports = __webpack_exports__;
+/******/ })()
+;

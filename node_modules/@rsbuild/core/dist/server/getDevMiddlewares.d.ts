@@ -1,0 +1,18 @@
+/// <reference types="node" />
+import type fs from 'node:fs';
+import type { CompileMiddlewareAPI, DevConfig, Middlewares, ServerConfig, UpgradeEvent } from '@rsbuild/shared';
+export type RsbuildDevMiddlewareOptions = {
+    pwd: string;
+    dev: DevConfig;
+    server: ServerConfig;
+    compileMiddlewareAPI?: CompileMiddlewareAPI;
+    outputFileSystem: typeof fs;
+    output: {
+        distPath: string;
+    };
+};
+export declare const getMiddlewares: (options: RsbuildDevMiddlewareOptions) => Promise<{
+    close: () => Promise<void>;
+    onUpgrade: UpgradeEvent;
+    middlewares: Middlewares;
+}>;
