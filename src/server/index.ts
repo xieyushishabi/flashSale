@@ -13,8 +13,14 @@ import { secureHeaders } from 'hono/secure-headers';
 // import { csrf } from 'hono/csrf'; // 根据需要启用和配置
 import { jwt } from 'hono/jwt'; // 根据需要启用和配置
 
+console.log('[ProcessDiag] Script execution started. Registering basic exit handler.');
+process.on('exit', (code) => {
+  console.log(`[ProcessDiag] MINIMAL EXIT HANDLER FIRED. Exit Code: ${code}`);
+});
+
 // 1. 导入配置模块 (这将首先执行，加载 .env.development)
 import config from './config';
+import appLogger from './utils/logger';
 
 // 2. 导入数据库连接函数及导出的实例 (db, mongo)
 import { connectToDatabase, closeDatabaseConnection } from './utils/database';
@@ -34,42 +40,44 @@ import healthRoutes from './routes/health'; // Import health check routes
 import { initializeQueues, rabbitmq, QueueNames /*, MessagePublisher*/ } from './utils/rabbitmq'; // Use 'rabbitmq' as exported by the module
 import { WebSocketService } from './websocket'; // WebSocketService will handle upgrades
 import { SeckillStockManager, redis } from './utils/redis'; // Import SeckillStockManager class and redis instance
-import type { IncomingMessage } from 'http';
+import type { IncomingMessage, Server as HttpServerType } from 'http'; // For WebSocket upgrade and server type
+import type { Http2Server, Http2SecureServer } from 'http2'; // Import http2 related types
 import type { Duplex } from 'stream';
 import { URL } from 'url'; // For parsing request.url in upgrade handler
 
+let serverInstance: HttpServerType | Http2Server | Http2SecureServer | null = null;
 const app = new Hono(); // 创建一个 Hono app 实例
 
 async function main() {
   try {
     // --- 初始化阶段 ---
-    console.log('[Main] Starting server initialization...');
-    console.log('[Main] Configuration loaded:');
-    console.log(`[Main]   Server Port: ${config.SERVER_PORT}`);
-    console.log(`[Main]   Database URL: ${config.DATABASE_URL ? 'Loaded' : 'MISSING!'}`);
-    console.log(`[Main]   JWT Secret: ${config.JWT_SECRET ? 'Loaded' : 'MISSING/Default'}`);
+    appLogger.info('[Main] Starting server initialization...');
+    appLogger.info('[Main] Configuration loaded:');
+    appLogger.info(`[Main]   Server Port: ${config.SERVER_PORT}`);
+    appLogger.info(`[Main]   Database URL: ${config.DATABASE_URL ? 'Loaded' : 'MISSING!'}`);
+    appLogger.info(`[Main]   JWT Secret: ${config.JWT_SECRET ? 'Loaded' : 'MISSING/Default'}`);
     // 在此添加其他相关配置日志
 
     // 连接数据库
-    console.log('[Main] Connecting to database...');
+    appLogger.info('[Main] Connecting to database...');
     await connectToDatabase();
-    console.log('[Main] Database connection attempt finished.');
+    appLogger.info('[Main] Database connection attempt finished.');
 
     if (!global.db || !global.mongo || !global.mongo.ObjectId) { // Check for global.db (Db instance) and global.mongo (driver for ObjectId)
-      console.error('[Main] FATAL: global.db or global.mongo.ObjectId is not available. Check database.ts.');
+      appLogger.error('[Main] FATAL: global.db or global.mongo.ObjectId is not available. Check database.ts.');
       process.exit(1);
     }
-    console.log('[Main] Verified: Global db and mongo instances are available.');
-    console.log(`[Main]   mongo.ObjectId is ${typeof mongo.ObjectId === 'function' ? 'available' : 'NOT available'}`);
+    appLogger.info('[Main] Verified: Global db and mongo instances are available.');
+    appLogger.info(`[Main]   mongo.ObjectId is ${typeof mongo.ObjectId === 'function' ? 'available' : 'NOT available'}`);
 
 
     // 初始化 RabbitMQ 队列
-    console.log('[Main] Initializing RabbitMQ queues...');
+    appLogger.info('[Main] Initializing RabbitMQ queues...');
     await initializeQueues();
-    console.log('[Main] RabbitMQ queues initialized.');
+    appLogger.info('[Main] RabbitMQ queues initialized.');
 
     // --- 中间件设置 ---
-    console.log('[Main] Setting up Hono middleware...');
+    appLogger.info('[Main] Setting up Hono middleware...');
     app.use('*', logger());
     app.use('*', cors({
       origin: '*', // 根据生产环境需要配置
@@ -81,13 +89,13 @@ async function main() {
     // JWT 中间件 (示例, 保护 /api/secure/* 路由)
     if (config.JWT_SECRET && config.JWT_SECRET !== 'YOUR_DEFAULT_JWT_SECRET_REPLACE_ME') {
       app.use('/api/secure/*', jwt({ secret: config.JWT_SECRET }));
-      console.log('[Main] JWT middleware configured for /api/secure/*');
+      appLogger.info('[Main] JWT middleware configured for /api/secure/*');
     } else {
-      console.warn('[Main] JWT_SECRET is not set or is the default placeholder. JWT protected routes will not be secure. Please set a strong JWT_SECRET in your .env.development file.');
+      appLogger.warn('[Main] JWT_SECRET is not set or is the default placeholder. JWT protected routes will not be secure. Please set a strong JWT_SECRET in your .env.development file.');
     }
 
     // --- 路由注册 ---
-    console.log('[Main] Registering API routes...');
+    appLogger.info('[Main] Registering API routes...');
     app.route('/api/auth', authRoutes);
     app.route('/api/products', productsRoutes);
     app.route('/api/seckill', seckillRoutes);
@@ -120,17 +128,17 @@ async function main() {
           }
         });
       } catch (error) {
-        console.error('[Main] Error fetching system stats:', error);
+        appLogger.error('[Main] Error fetching system stats:', error);
         return c.json({ success: false, message: 'Failed to retrieve system statistics' }, 500);
       }
     });
 
     // --- RabbitMQ 消费者设置 ---
-    console.log('[Main] Setting up RabbitMQ consumers...');
+    appLogger.info('[Main] Setting up RabbitMQ consumers...');
     // 订单处理消费者
     await rabbitmq.consume(QueueNames.ORDER_PROCESSING, async (message) => {
-      console.log('[RabbitMQ] Received order for processing:', message.data);
-      const { orderId, userId, productId } = message.data; // 假设此结构
+      const { orderId, userId, productId } = message.data;
+      appLogger.info(`[RabbitMQ] Received order ${orderId} for processing.`);
       try {
         // 模拟订单处理
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -139,22 +147,22 @@ async function main() {
           { $set: { status: 'confirmed', updatedAt: new Date() } }
         );
         WebSocketService.sendOrderStatus(userId, orderId, 'confirmed');
-        console.log(`[RabbitMQ] Order ${orderId} processed and confirmed.`);
+        appLogger.info(`[RabbitMQ] Order ${orderId} processed and confirmed.`);
       } catch (error) {
-        console.error(`[RabbitMQ] Error processing order ${orderId}:`, error);
+        appLogger.error(`[RabbitMQ] Error processing order ${orderId}:`, error);
         // 如果需要，实现重试或死信队列逻辑
       }
     });
 
     // 秒杀通知消费者
     await rabbitmq.consume(QueueNames.SECKILL_NOTIFICATIONS, async (message) => {
-      console.log('[RabbitMQ] Received seckill notification:', message.data);
+      appLogger.info('[RabbitMQ] Received seckill notification:', message.data);
       const { productId, stockLeft, status } = message.data; // status 可以是 'active', 'sold_out'
       try {
         WebSocketService.sendStockUpdate(productId, stockLeft);
         if (status === 'sold_out' || stockLeft === 0) {
            WebSocketService.sendSeckillStatus(productId, 'sold_out');
-           console.log(`[RabbitMQ] Product ${productId} is sold out. Notified clients.`);
+           appLogger.info(`[RabbitMQ] Product ${productId} is sold out. Notified clients.`);
            // 如果秒杀逻辑尚未处理，则可选择在数据库中更新商品状态
            // await db.collection('12a2d3dc_products').updateOne(
            //   { _id: new mongo.ObjectId(productId) },
@@ -162,22 +170,24 @@ async function main() {
            // );
         }
       } catch (error) {
-        console.error(`[RabbitMQ] Error processing seckill notification for ${productId}:`, error);
+        appLogger.error(`[RabbitMQ] Error processing seckill notification for ${productId}:`, error);
       }
     });
 
     // 统计更新消费者 (示例)
     await rabbitmq.consume(QueueNames.STATS_UPDATE, async (message) => {
-      console.log('[RabbitMQ] Received stats update:', message.data);
+      appLogger.info('[RabbitMQ] Received stats update:', message.data);
       // 实现更新/广播实时统计数据的逻辑
     });
-    console.log('[Main] RabbitMQ consumers set up.');
+    appLogger.info('[Main] RabbitMQ consumers set up.');
 
     // --- 全局错误处理程序 ---
     app.onError((err, c) => {
-      console.error('[Main] Hono global error:', err);
+      appLogger.error('[Main] Hono global error:', err);
       // 如果需要，记录更详细的错误以进行调试
-      // console.error(err.stack);
+      // appLogger.error(err.stack);
+      // 如果需要，记录更详细的错误以进行调试
+      // logger.error(err.stack);
       return c.json({ error: 'Internal Server Error', message: err.message }, 500);
     });
 
@@ -187,8 +197,15 @@ async function main() {
     const server = serve({
       fetch: app.fetch,
       port: PORT,
-    }, (info) => {
-      console.log(`[Main] Server listening on http://localhost:${info.port}`);
+    }, (info: { port: number; address: string; family: string; }) => {
+      appLogger.info(`[Main] Server listening on http://localhost:${info.port}`);
+    });
+    serverInstance = server; // Assign to the global serverInstance
+
+    server.on('error', (err: Error) => {
+      appLogger.error('[Main] HTTP Server instance error:', err);
+      // Optionally, force exit with error code if a server error occurs
+      // process.exit(1);
     });
 
     server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
@@ -197,13 +214,16 @@ async function main() {
       if (pathname === '/ws') {
         WebSocketService.handleUpgrade(req, socket, head);
       } else {
-        console.warn(`[Server] Received upgrade request for non-/ws path ${pathname}, destroying socket.`);
+        appLogger.warn(`[Server] Received upgrade request for non-/ws path ${pathname}, destroying socket.`);
         socket.destroy();
       }
     });
 
+    appLogger.info('[Main] Server setup complete. Adding indefinite promise to keep process alive for debugging...');
+    await new Promise(() => {}); // Keep process alive indefinitely for debugging
+
   } catch (error) {
-    console.error('[Main] FATAL: A critical error occurred during server startup:', error);
+    appLogger.error('[Main] FATAL: A critical error occurred during server startup:', error);
     await closeDatabaseConnection(); // Attempt to close DB connection on fatal error
     process.exit(1); // Exit if critical setup fails
   }
@@ -214,18 +234,64 @@ main();
 
 // --- 优雅关机处理 ---
 async function gracefulShutdown(signal: string) {
-  console.log(`[Main] Received ${signal}. Initiating graceful shutdown...`);
-  try {
-    // 如果 `serve` 未完全处理，则添加任何特定的服务器关闭逻辑
-    // 例如, WebSocketService.closeAllConnections();
-    await closeDatabaseConnection();
+  appLogger.info(`[Main] Received ${signal}. Initiating graceful shutdown...`);
+  const timeout = 10000; // 10 seconds timeout for shutdown operations
+  let exitCode = 0;
 
-    // 在此添加其他清理任务
-    console.log('[Main] All resources cleaned up. Server shutting down.');
-    process.exit(0);
+  try {
+    // 1. Stop accepting new HTTP requests
+    if (serverInstance) {
+      appLogger.info('[Shutdown] Closing HTTP server...');
+      await new Promise<void>((resolve, reject) => {
+        const serverCloseTimer = setTimeout(() => {
+          appLogger.warn('[Shutdown] HTTP server close timed out.');
+          reject(new Error('HTTP server close timed out'));
+        }, timeout);
+
+        serverInstance.close((err?: Error) => { // close callback can have an optional error
+          clearTimeout(serverCloseTimer);
+          if (err) {
+            appLogger.error('[Shutdown] Error closing HTTP server:', err);
+            exitCode = 1; // Mark for non-zero exit if server close fails
+            return reject(err);
+          }
+          appLogger.info('[Shutdown] HTTP server closed.');
+          resolve();
+        });
+      });
+    } else {
+      appLogger.info('[Shutdown] HTTP server instance not found, skipping closure.');
+    }
+
+    // 2. Close WebSocket connections (Module or method might not exist yet)
+    // if (typeof WebSocketService?.closeAllConnections === 'function') {
+    //   appLogger.info('[Shutdown] Closing WebSocket connections...');
+    //   await WebSocketService.closeAllConnections();
+    //   appLogger.info('[Shutdown] WebSocket connections closed.');
+    // } else {
+    //   appLogger.info('[Shutdown] WebSocketService or closeAllConnections method not found, skipping.');
+    // }
+    
+    // 3. Close RabbitMQ connection (Module or method might not exist yet)
+    // if (rabbitmq && typeof rabbitmq.closeConnection === 'function') {
+    //     appLogger.info('[Shutdown] Closing RabbitMQ connection...');
+    //     await rabbitmq.closeConnection();
+    //     appLogger.info('[Shutdown] RabbitMQ connection closed.');
+    // } else {
+    //     appLogger.info('[Shutdown] RabbitMQ service not initialized or closeConnection not available, skipping.');
+    // }
+
+    // 4. Close Database connection
+    appLogger.info('[Shutdown] Closing database connection...');
+    await closeDatabaseConnection();
+    appLogger.info('[Shutdown] Database connection closed.');
+
   } catch (error) {
-    console.error('[Main] Error during graceful shutdown:', error);
-    process.exit(1);
+    appLogger.error('[Shutdown] Error during graceful shutdown:', error);
+    exitCode = 1;
+  } finally {
+    appLogger.info(`[Shutdown] Graceful shutdown sequence completed. Exiting with code ${exitCode}.`);
+    process.exit(exitCode);
   }
 }
 
