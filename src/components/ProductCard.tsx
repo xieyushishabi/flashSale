@@ -10,6 +10,24 @@ import { Clock, ShoppingCart, Users, Zap } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { Product } from '../shared/types';
 
+// Import local images
+import iPhoneImg from '../assets/images/iPhone.jpeg';
+import oppoImg from '../assets/images/oppo.jpeg';
+import vivoImg from '../assets/images/vivo.jpeg';
+import huaweiImg from '../assets/images/华为.jpeg';
+import xiaomiImg from '../assets/images/小米.jpeg';
+
+// Create an image map
+const imageMap: { [key: string]: string } = {
+  'iPhone.jpeg': iPhoneImg,
+  'oppo.jpeg': oppoImg,
+  'vivo.jpeg': vivoImg,
+  '华为.jpeg': huaweiImg,
+  '小米.jpeg': xiaomiImg,
+  // Add a default or placeholder image if needed
+  'default.jpeg': iPhoneImg, // Example: use iPhone image as a fallback
+};
+
 interface ProductCardProps {
   product: Product & { currentStock: number };
   onSeckill?: (productId: string) => void;
@@ -108,7 +126,7 @@ export function ProductCard({ product, onSeckill, isAuthenticated }: ProductCard
     >
       <div className="relative">
         <img
-          src={product.image}
+          src={imageMap[product.image] || imageMap['default.jpeg']}
           alt={product.name}
           className="w-full h-48 object-cover"
         />

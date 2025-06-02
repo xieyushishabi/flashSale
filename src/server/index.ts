@@ -11,6 +11,7 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { HTTPException } from 'hono/http-exception';
+
 import fs from 'fs/promises'; // 用于异步文件操作
 import path from 'path'; // 用于处理文件路径
 // import { csrf } from 'hono/csrf'; // 根据需要启用和配置
@@ -111,6 +112,7 @@ async function main() {
     }));
     app.use('*', secureHeaders());
     // app.use('*', csrf()); // 如果需要，启用并配置
+
     // JWT middleware for /api/secure/* is handled by the secureRoutes instance
 
     // --- 路由注册 ---

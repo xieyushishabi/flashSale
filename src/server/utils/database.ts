@@ -31,7 +31,7 @@ export async function connectToDatabase() {
     console.error('[Database] FATAL: MONGODB_URI is not available from config.');
     throw new Error('MONGODB_URI is not configured.');
   }
-  const client = new MongoClient(MONGODB_URI);
+  const client = new MongoClient(MONGODB_URI, { readPreference: 'secondaryPreferred' });
 
   try {
     await client.connect();

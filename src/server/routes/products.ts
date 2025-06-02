@@ -89,13 +89,14 @@ products.get('/', zValidator('query', productQuerySchema), async (c) => {
 
     // 获取实时库存信息
     const productsWithStock = await Promise.all(
-      productsData.map(async (product) => {
+      productsData.map(async (productDoc) => {
+        const product = productDoc as unknown as Product; 
         const currentStock = await SeckillStockManager.getStock(product._id.toString());
         return {
-          ...product,
-          _id: product._id.toString(),
-          currentStock: currentStock > 0 ? currentStock : product.stock,
-        };
+          ...product, 
+          _id: product._id.toString(), 
+          currentStock: typeof currentStock === 'number' && currentStock > 0 ? currentStock : product.stock, 
+        } as (Product & { currentStock: number }); 
       })
     );
 
@@ -178,7 +179,7 @@ products.post('/init', async (c) => {
         originalPrice: 9999,
         seckillPrice: 8888,
         stock: 50,
-        image: 'https://picsum.photos/300/300?random=1',
+        image: 'iPhone.jpeg',
         startTime: new Date(now.getTime() - 60 * 60 * 1000), // 1小时前开始
         endTime: new Date(now.getTime() + 24 * 60 * 60 * 1000), // 24小时后结束
         status: 'active',
@@ -191,7 +192,7 @@ products.post('/init', async (c) => {
         originalPrice: 6999,
         seckillPrice: 5999,
         stock: 30,
-        image: 'https://picsum.photos/300/300?random=2',
+        image: '华为.jpeg',
         startTime: new Date(now.getTime() - 30 * 60 * 1000),
         endTime: new Date(now.getTime() + 12 * 60 * 60 * 1000),
         status: 'active',
@@ -204,7 +205,7 @@ products.post('/init', async (c) => {
         originalPrice: 5999,
         seckillPrice: 4999,
         stock: 80,
-        image: 'https://picsum.photos/300/300?random=3',
+        image: '小米.jpeg',
         startTime: new Date(now.getTime() + 60 * 60 * 1000), // 1小时后开始
         endTime: new Date(now.getTime() + 48 * 60 * 60 * 1000),
         status: 'pending',
@@ -217,7 +218,7 @@ products.post('/init', async (c) => {
         originalPrice: 4999,
         seckillPrice: 3999,
         stock: 60,
-        image: 'https://picsum.photos/300/300?random=4',
+        image: 'oppo.jpeg',
         startTime: new Date(now.getTime() - 120 * 60 * 1000),
         endTime: new Date(now.getTime() + 6 * 60 * 60 * 1000),
         status: 'active',
@@ -230,7 +231,7 @@ products.post('/init', async (c) => {
         originalPrice: 4499,
         seckillPrice: 3599,
         stock: 40,
-        image: 'https://picsum.photos/300/300?random=5',
+        image: 'vivo.jpeg',
         startTime: new Date(now.getTime() - 240 * 60 * 1000),
         endTime: new Date(now.getTime() - 60 * 60 * 1000), // 已结束
         status: 'ended',
@@ -265,10 +266,10 @@ products.post('/init', async (c) => {
 
     // 6. 同步到搜索引擎
     console.log('🔍 同步商品数据到搜索引擎...');
-    for (const product of insertedProducts) {
+    for (const insertedDoc of insertedProducts) {
       await ProductSearchService.indexProduct({
-        ...product,
-        _id: product._id.toString(),
+        ...(insertedDoc as unknown as Product),
+        _id: insertedDoc._id.toString(),
       });
     }
 
