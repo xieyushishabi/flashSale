@@ -35,21 +35,28 @@ import productsRoutes from './routes/products';
 import seckillRoutes from './routes/seckill';
 import healthRoutes from './routes/health'; // Import health check routes
 import { orderRoutes } from './routes/orders'; // 假设这些存在或将被添加
+
+import { rabbitMQService } from './utils/rabbitmq'; // 假设这些存在或将被添加
 // import { paymentRoutes } from './routes/payment';
 // import { userRoutes } from './routes/users';
 // import { cartRoutes } from './routes/cart';
 
 
 // 4. 导入其他服务模块
-import { initializeQueues, rabbitmq, QueueNames /*, MessagePublisher*/ } from './utils/rabbitmq'; // Use 'rabbitmq' as exported by the module
+
 import { WebSocketService } from './websocket'; // WebSocketService will handle upgrades
-import { SeckillStockManager, redis } from './utils/redis'; // Import SeckillStockManager class and redis instance
+import { SeckillStockManager, redis, redisConnectionPromise } from './utils/redis'; // Import SeckillStockManager class and redis instance
 import type { IncomingMessage, Server as HttpServerType } from 'http'; // For WebSocket upgrade and server type
 import type { Http2Server, Http2SecureServer } from 'http2'; // Import http2 related types
 import type { Duplex } from 'stream';
 import { URL } from 'url'; // For parsing request.url in upgrade handler
 
 let serverInstance: HttpServerType | Http2Server | Http2SecureServer | null = null;
+
+// 定义 RabbitMQ 队列名称常量
+const ORDER_PROCESSING_QUEUE = 'order_processing_queue';
+const SECKILL_NOTIFICATIONS_QUEUE = 'seckill_notifications_queue';
+const STATS_UPDATE_QUEUE = 'stats_update_queue';
 const app = new Hono(); // 创建一个 Hono app 实例
 
 async function main() {
@@ -61,6 +68,15 @@ async function main() {
     appLogger.info(`[Main]   Database URL: ${config.DATABASE_URL ? 'Loaded' : 'MISSING!'}`);
     appLogger.info(`[Main]   JWT Secret: ${config.JWT_SECRET ? 'Loaded' : 'MISSING/Default'}`);
     // 在此添加其他相关配置日志
+
+    // 等待 Redis 连接成功
+    appLogger.info('[Main] Waiting for Redis connection...');
+    const redisClient = await redisConnectionPromise;
+    if (!redisClient) {
+      appLogger.error('[Main] FATAL: Redis client failed to connect after multiple retries. Exiting.');
+      process.exit(1);
+    }
+    appLogger.info('[Main] Redis client connected and ready.');
 
     // 连接数据库
     appLogger.info('[Main] Connecting to database...');
@@ -75,10 +91,15 @@ async function main() {
     appLogger.info(`[Main]   mongo.ObjectId is ${typeof mongo.ObjectId === 'function' ? 'available' : 'NOT available'}`);
 
 
-    // 初始化 RabbitMQ 队列
-    appLogger.info('[Main] Initializing RabbitMQ queues...');
-    await initializeQueues();
-    appLogger.info('[Main] RabbitMQ queues initialized.');
+    // 初始化 RabbitMQ 服务连接
+    appLogger.info('[Main] Initializing RabbitMQ service connection...');
+    try {
+      await rabbitMQService.connect();
+      appLogger.info('[Main] RabbitMQ service connected successfully.');
+    } catch (error) {
+      appLogger.error('[Main] FATAL: Failed to connect to RabbitMQ service.', error);
+      process.exit(1); // 连接失败则退出
+    }
 
     // --- 中间件设置 ---
     appLogger.info('[Main] Setting up Hono middleware...');
@@ -267,11 +288,27 @@ async function main() {
       }
     });
 
+    // --- 声明 RabbitMQ 队列 ---
+    appLogger.info('[Main] Asserting RabbitMQ queues...');
+    try {
+      await rabbitMQService.assertQueue(ORDER_PROCESSING_QUEUE, { durable: true });
+      appLogger.info(`[Main] Queue ${ORDER_PROCESSING_QUEUE} asserted.`);
+      await rabbitMQService.assertQueue(SECKILL_NOTIFICATIONS_QUEUE, { durable: true });
+      appLogger.info(`[Main] Queue ${SECKILL_NOTIFICATIONS_QUEUE} asserted.`);
+      await rabbitMQService.assertQueue(STATS_UPDATE_QUEUE, { durable: true });
+      appLogger.info(`[Main] Queue ${STATS_UPDATE_QUEUE} asserted.`);
+    } catch (error) {
+      appLogger.error('[Main] FATAL: Failed to assert RabbitMQ queues.', error);
+      process.exit(1); // 声明队列失败则退出
+    }
+
     // --- RabbitMQ 消费者设置 ---
     appLogger.info('[Main] Setting up RabbitMQ consumers...');
     // 订单处理消费者
-    await rabbitmq.consume(QueueNames.ORDER_PROCESSING, async (message) => {
-      const { orderId, userId, productId } = message.data;
+    await rabbitMQService.consumeMessage(ORDER_PROCESSING_QUEUE, async (msg, channel) => {
+      if (!msg) { appLogger.warn('[RabbitMQ] Received null message for ORDER_PROCESSING. Ignoring.'); return; }
+      const messageData = JSON.parse(msg.content.toString());
+      const { orderId, userId, productId } = messageData;
       appLogger.info(`[RabbitMQ] Received order ${orderId} for processing.`);
       try {
         // 模拟订单处理
@@ -282,16 +319,20 @@ async function main() {
         );
         WebSocketService.sendOrderStatus(userId, orderId, 'confirmed');
         appLogger.info(`[RabbitMQ] Order ${orderId} processed and confirmed.`);
+        rabbitMQService.ackMessage(msg);
       } catch (error) {
-        appLogger.error(`[RabbitMQ] Error processing order ${orderId}:`, error);
+        appLogger.error(`[RabbitMQ] Error processing order:`, error);
+        if (msg) { rabbitMQService.nackMessage(msg, false, true); }
         // 如果需要，实现重试或死信队列逻辑
       }
     });
 
     // 秒杀通知消费者
-    await rabbitmq.consume(QueueNames.SECKILL_NOTIFICATIONS, async (message) => {
-      appLogger.info('[RabbitMQ] Received seckill notification:', message.data);
-      const { productId, stockLeft, status } = message.data; // status 可以是 'active', 'sold_out'
+    await rabbitMQService.consumeMessage(SECKILL_NOTIFICATIONS_QUEUE, async (msg, channel) => {
+      if (!msg) { appLogger.warn('[RabbitMQ] Received null message for SECKILL_NOTIFICATIONS. Ignoring.'); return; }
+      const messageData = JSON.parse(msg.content.toString());
+      appLogger.info('[RabbitMQ] Received seckill notification:', messageData);
+      const { productId, stockLeft, status } = messageData; // status 可以是 'active', 'sold_out'
       try {
         WebSocketService.sendStockUpdate(productId, stockLeft);
         if (status === 'sold_out' || stockLeft === 0) {
@@ -303,14 +344,21 @@ async function main() {
            //   { $set: { status: 'ended', seckillStatus: 'sold_out', updatedAt: new Date() } }
            // );
         }
+        rabbitMQService.ackMessage(msg); // Acknowledge the message after successful processing
       } catch (error) {
         appLogger.error(`[RabbitMQ] Error processing seckill notification for ${productId}:`, error);
+        if (msg) { rabbitMQService.nackMessage(msg, false, true); }
       }
     });
 
     // 统计更新消费者 (示例)
-    await rabbitmq.consume(QueueNames.STATS_UPDATE, async (message) => {
-      appLogger.info('[RabbitMQ] Received stats update:', message.data);
+    await rabbitMQService.consumeMessage(STATS_UPDATE_QUEUE, async (msg, channel) => {
+      if (!msg) { appLogger.warn('[RabbitMQ] Received null message for STATS_UPDATE. Ignoring.'); return; }
+      const messageData = JSON.parse(msg.content.toString());
+      appLogger.info('[RabbitMQ] Received stats update:', messageData);
+      // TODO: Implement actual stats update logic
+      // For now, just ack the message
+      rabbitMQService.ackMessage(msg);
       // 实现更新/广播实时统计数据的逻辑
     });
     appLogger.info('[Main] RabbitMQ consumers set up.');

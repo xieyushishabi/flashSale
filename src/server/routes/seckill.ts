@@ -8,12 +8,15 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { SeckillStockManager, RedisKeys } from '../utils/redis';
-import { rabbitmq, QueueNames, MessagePublisher } from '../utils/rabbitmq';
+import { rabbitMQService } from '../utils/rabbitmq'; // Updated import
 import { WebSocketService } from '../websocket';
 import { authenticateToken } from '../middleware/auth';
 import type { ApiResponse } from '../../shared/types';
 
 const seckill = new Hono();
+
+// Define RabbitMQ queue name for order processing (consistent with index.ts)
+const ORDER_PROCESSING_QUEUE = 'order_processing_queue';
 
 // 秒杀下单参数验证
 const seckillSchema = z.object({
@@ -91,8 +94,9 @@ seckill.post('/', authenticateToken, zValidator('json', seckillSchema), async (c
     console.log(`📝 订单创建成功: ${orderId}`);
 
     // 发布订单创建消息，以便后续处理（例如：确认订单状态）
-    await MessagePublisher.publishOrderMessage(orderId, user._id, productId);
-    console.log(`📬 已发布订单创建消息到队列: ${orderId}`);
+    const orderMessage = { orderId, userId: user._id, productId, status: 'created' };
+    await rabbitMQService.publishMessage(ORDER_PROCESSING_QUEUE, orderMessage);
+    console.log(`📬 已发布订单创建消息到队列 ${ORDER_PROCESSING_QUEUE}: ${JSON.stringify(orderMessage)}`);
 
     // 记录秒杀日志
     await db.collection('12a2d3dc_seckill_logs').insertOne({

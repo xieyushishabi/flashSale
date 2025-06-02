@@ -25,18 +25,20 @@ const RETRY_DELAY_MS = 5000; // Delay between retries
  * Initializes and connects the Redis client.
  * Handles connection events and implements a retry mechanism for the initial connection.
  */
-async function initializeRedisClient(): Promise<void> {
+async function initializeRedisClient(): Promise<RedisClientType<RedisModules, RedisFunctions, RedisScripts> | null> {
   // Avoid re-initializing if already connected and open
   if (redis && redis.isOpen) {
     logger.info('Redis client is already connected.');
-    return;
+    return redis;
   }
 
   // Avoid re-initializing if a connection attempt is already in progress by another call
   // This is a simple guard; more sophisticated locking might be needed in some scenarios.
   if (connectionAttempts > 0 && connectionAttempts < MAX_CONNECTION_ATTEMPTS && !(redis && redis.isOpen)) {
       logger.info('Redis connection attempt already in progress...');
-      return;
+      // Potentially return a promise that resolves when the ongoing attempt completes
+      // For now, returning null or an existing promise if we had one for the current attempt
+      return null; // Or handle more gracefully by returning the promise of the ongoing attempt
   }
 
   connectionAttempts++;
@@ -87,7 +89,8 @@ async function initializeRedisClient(): Promise<void> {
   try {
     await client.connect();
     // Assign to the exported variable only after a successful connection.
-    redis = client as RedisClientType<RedisModules, RedisFunctions, RedisScripts>; 
+    redis = client as RedisClientType<RedisModules, RedisFunctions, RedisScripts>;
+    return redis; 
   } catch (err) {
     logger.error(`❌ Failed to connect to Redis (Attempt ${connectionAttempts}/${MAX_CONNECTION_ATTEMPTS}):`, err);
     if (connectionAttempts < MAX_CONNECTION_ATTEMPTS) {
@@ -98,11 +101,12 @@ async function initializeRedisClient(): Promise<void> {
       // Application might need to handle this state (e.g., run in degraded mode or exit).
       // For now, `redis` remains uninitialized or points to a closed client.
     }
+    return null; // Indicate failure to connect after retries
   }
 }
 
-// Initialize the Redis client when this module is loaded.
-initializeRedisClient();
+// Initialize the Redis client when this module is loaded and export the promise.
+export const redisConnectionPromise = initializeRedisClient();
 
 /**
  * Ensures the Redis client is connected before performing an operation.

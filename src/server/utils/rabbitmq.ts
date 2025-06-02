@@ -1,131 +1,199 @@
-/**
- * RabbitMQ消息队列工具类
- * 使用RabbitMQ技术实现异步订单处理和系统解耦
- * 核心功能：订单队列、死信队列、消息持久化
- */
+import { connect as amqplibConnect, Channel, ChannelModel, Connection, ConsumeMessage, Options } from 'amqplib';
+import logger from './logger';
+import config from '../config';
 
-interface QueueMessage {
-  id: string;
-  type: string;
-  data: any;
-  timestamp: number;
-  retryCount?: number;
-}
+// Define MessageHandler type for consumers
+type MessageHandler = (msg: ConsumeMessage | null, channel: Channel) => void | Promise<void>;
 
-// 模拟RabbitMQ消息队列
-class MockRabbitMQ {
-  private queues: Map<string, QueueMessage[]> = new Map();
-  private consumers: Map<string, Array<(message: QueueMessage) => Promise<void>>> = new Map();
+class RabbitMQService {
+  private connection: ChannelModel | null = null;
+  private channel: Channel | null = null;
+  private connectionString: string;
+  private isConnecting: boolean = false;
+  private reconnectAttempts: number = 0;
+  private readonly maxReconnectAttempts: number = 5;
+  private readonly reconnectDelay: number = 5000; // 5 seconds
 
-  async createQueue(queueName: string): Promise<void> {
-    if (!this.queues.has(queueName)) {
-      this.queues.set(queueName, []);
-      this.consumers.set(queueName, []);
-      console.log(`创建RabbitMQ队列: ${queueName}`);
-    }
+  constructor() {
+    this.connectionString = config.RABBITMQ_URL || 'amqp://localhost:5672';
+    // Initialize connection when the service is instantiated
+    // this.connect(); // Let's connect explicitly or on first use
   }
 
-  async publishMessage(queueName: string, message: QueueMessage): Promise<void> {
-    const queue = this.queues.get(queueName);
-    if (!queue) {
-      throw new Error(`队列 ${queueName} 不存在`);
-    }
-
-    queue.push(message);
-    console.log(`发布消息到队列 ${queueName}:`, message.type);
-
-    // 异步处理消息
-    setImmediate(() => this.processMessage(queueName));
-  }
-
-  async consume(queueName: string, handler: (message: QueueMessage) => Promise<void>): Promise<void> {
-    const consumers = this.consumers.get(queueName);
-    if (!consumers) {
-      throw new Error(`队列 ${queueName} 不存在`);
-    }
-
-    consumers.push(handler);
-    console.log(`注册消费者到队列: ${queueName}`);
-  }
-
-  private async processMessage(queueName: string): Promise<void> {
-    const queue = this.queues.get(queueName);
-    const consumers = this.consumers.get(queueName);
-
-    if (!queue || !consumers || queue.length === 0 || consumers.length === 0) {
+  public async connect(): Promise<void> {
+    if (this.isConnected() || this.isConnecting) {
+      logger.info('[RabbitMQ] Already connected or connecting.');
       return;
     }
 
-    const message = queue.shift()!;
-    
+    this.isConnecting = true;
+    logger.info(`[RabbitMQ] Connecting to ${this.connectionString}...`);
+
     try {
-      // 并行处理所有消费者
-      await Promise.all(consumers.map(consumer => consumer(message)));
-      console.log(`成功处理消息: ${message.type}`);
+      this.connection = await amqplibConnect(this.connectionString) as unknown as ChannelModel;
+      logger.info('[RabbitMQ] Successfully connected.');
+
+      this.connection.on('error', (err) => {
+        logger.error('[RabbitMQ] Connection error:', err.message);
+        this.handleReconnect();
+      });
+
+      this.connection.on('close', () => {
+        logger.info('[RabbitMQ] Connection closed.');
+        if (!this.isConnecting) { // Avoid reconnect if close was intentional or during initial connect fail
+            this.handleReconnect();
+        }
+      });
+
+      this.channel = await this.connection.createChannel();
+      logger.info('[RabbitMQ] Channel created.');
+      this.reconnectAttempts = 0; // Reset attempts on successful connection
+      this.isConnecting = false;
     } catch (error) {
-      console.error(`处理消息失败: ${message.type}`, error.message);
-      
-      // 重试机制
-      const retryCount = (message.retryCount || 0) + 1;
-      if (retryCount < 3) {
-        message.retryCount = retryCount;
-        queue.push(message); // 重新入队
-        console.log(`消息重试 ${retryCount}/3: ${message.type}`);
-      } else {
-        console.error(`消息达到最大重试次数，丢弃: ${message.type}`);
-      }
+      logger.error('[RabbitMQ] Failed to connect:', error);
+      this.isConnecting = false;
+      this.handleReconnect();
+      // Rethrow to allow caller to handle initial connection failure if necessary
+      throw error;
     }
   }
-}
 
-export const rabbitmq = new MockRabbitMQ();
+  private async handleReconnect(): Promise<void> {
+    if (this.isConnecting) return; // Already trying to reconnect or connect
 
-// 队列名称常量
-export const QueueNames = {
-  ORDER_PROCESSING: 'order.processing',
-  SECKILL_NOTIFICATIONS: 'seckill.notifications',
-  STATS_UPDATE: 'stats.update',
-};
+    if (this.channel) {
+        try { await this.channel.close(); } catch (e) { /* ignore */ }
+        this.channel = null;
+    }
+    if (this.connection) {
+        try { await this.connection.close(); } catch (e) { /* ignore */ }
+        this.connection = null;
+    }
 
-// 消息发布器
-export class MessagePublisher {
-  static async publishOrderMessage(orderId: string, userId: string, productId: string): Promise<void> {
-    const message: QueueMessage = {
-      id: `order_${orderId}`,
-      type: 'ORDER_CREATED',
-      data: { orderId, userId, productId },
-      timestamp: Date.now(),
-    };
-
-    await rabbitmq.publishMessage(QueueNames.ORDER_PROCESSING, message);
+    if (this.reconnectAttempts < this.maxReconnectAttempts) {
+      this.reconnectAttempts++;
+      logger.info(`[RabbitMQ] Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts}) in ${this.reconnectDelay / 1000}s...`);
+      setTimeout(() => this.connect().catch(err => logger.error('[RabbitMQ] Reconnect attempt failed:', err)), this.reconnectDelay);
+    } else {
+      logger.error('[RabbitMQ] Max reconnect attempts reached. Giving up.');
+    }
   }
 
-  static async publishSeckillNotification(productId: string, stockLeft: number): Promise<void> {
-    const message: QueueMessage = {
-      id: `seckill_${productId}_${Date.now()}`,
-      type: 'STOCK_UPDATE',
-      data: { productId, stockLeft },
-      timestamp: Date.now(),
-    };
-
-    await rabbitmq.publishMessage(QueueNames.SECKILL_NOTIFICATIONS, message);
+  public isConnected(): boolean {
+    return this.connection !== null && this.channel !== null;
   }
 
-  static async publishStatsUpdate(type: string, data: any): Promise<void> {
-    const message: QueueMessage = {
-      id: `stats_${Date.now()}`,
-      type: 'STATS_UPDATE',
-      data: { type, ...data },
-      timestamp: Date.now(),
-    };
+  private async ensureConnected(): Promise<void> {
+    if (!this.isConnected()) {
+      logger.info('[RabbitMQ] Not connected. Attempting to connect...');
+      await this.connect();
+    }
+  }
 
-    await rabbitmq.publishMessage(QueueNames.STATS_UPDATE, message);
+  public async assertQueue(queueName: string, options?: Options.AssertQueue): Promise<void> {
+    await this.ensureConnected();
+    if (this.channel) {
+      await this.channel.assertQueue(queueName, { durable: true, ...options });
+      logger.info(`[RabbitMQ] Queue asserted: ${queueName}`);
+    } else {
+      throw new Error('[RabbitMQ] Channel not available to assert queue.');
+    }
+  }
+
+  public async publishMessage(queueName: string, message: any, options?: Options.Publish): Promise<boolean> {
+    await this.ensureConnected();
+    if (this.channel) {
+      const messageString = JSON.stringify(message);
+      const success = this.channel.sendToQueue(queueName, Buffer.from(messageString), { persistent: true, ...options });
+      if (success) {
+        logger.info(`[RabbitMQ] Message published to queue ${queueName}: ${messageString.substring(0,100)}...`);
+      } else {
+        logger.warn(`[RabbitMQ] Failed to publish message to queue ${queueName} (buffer full).`);
+        // Implement retry or dead-lettering if necessary
+      }
+      return success;
+    } else {
+      logger.error('[RabbitMQ] Channel not available to publish message.');
+      return false;
+    }
+  }
+
+  public async consumeMessage(queueName: string, handler: MessageHandler, options?: Options.Consume): Promise<string | null> {
+    await this.ensureConnected();
+    if (this.channel) {
+      logger.info(`[RabbitMQ] Attempting to consume from queue: ${queueName}`);
+      const { consumerTag } = await this.channel.consume(queueName, (msg) => {
+        if (msg) {
+          try {
+            // Pass the channel for manual ack/nack if needed by the handler
+            handler(msg, this.channel!); 
+          } catch (error) {
+            logger.error(`[RabbitMQ] Error in message handler for queue ${queueName}:`, error);
+            // Consider nack-ing the message if an error occurs in the handler
+            // this.channel?.nack(msg, false, false); // Example: nack without requeue
+          }
+        } else {
+            logger.warn(`[RabbitMQ] Received null message from queue ${queueName}`);
+            handler(null, this.channel!); // Allow handler to be notified of null message (e.g. queue deleted)
+        }
+      }, { noAck: false, ...options }); // Default to manual acknowledgment (noAck: false)
+      logger.info(`[RabbitMQ] Consumer registered for queue ${queueName} with tag ${consumerTag}`);
+      return consumerTag;
+    } else {
+      logger.error('[RabbitMQ] Channel not available to consume messages.');
+      return null;
+    }
+  }
+
+  public ackMessage(message: ConsumeMessage): void {
+    if (this.channel) {
+        try {
+            this.channel.ack(message);
+            logger.debug(`[RabbitMQ] Message acknowledged: ${message.fields.deliveryTag}`);
+        } catch (error) {
+            logger.error(`[RabbitMQ] Failed to acknowledge message ${message.fields.deliveryTag}:`, error);
+        }
+    } else {
+        logger.warn('[RabbitMQ] Cannot ack message, channel not available.');
+    }
+  }
+
+  public nackMessage(message: ConsumeMessage, allUpTo?: boolean, requeue?: boolean): void {
+    if (this.channel) {
+        try {
+            this.channel.nack(message, allUpTo, requeue);
+            logger.debug(`[RabbitMQ] Message nacked: ${message.fields.deliveryTag}, requeue: ${requeue}`);
+        } catch (error) {
+            logger.error(`[RabbitMQ] Failed to nack message ${message.fields.deliveryTag}:`, error);
+        }
+    } else {
+        logger.warn('[RabbitMQ] Cannot nack message, channel not available.');
+    }
+  }
+
+  public async close(): Promise<void> {
+    this.isConnecting = false; // Prevent reconnect attempts during explicit close
+    if (this.channel) {
+      try {
+        await this.channel.close();
+        logger.info('[RabbitMQ] Channel closed.');
+      } catch (error) {
+        logger.error('[RabbitMQ] Error closing channel:', error);
+      }
+      this.channel = null;
+    }
+    if (this.connection) {
+      try {
+        await this.connection.close();
+        logger.info('[RabbitMQ] Connection closed.');
+      } catch (error) {
+        logger.error('[RabbitMQ] Error closing connection:', error);
+      }
+      this.connection = null;
+    }
+    this.reconnectAttempts = this.maxReconnectAttempts; // Prevent further reconnects after explicit close
   }
 }
 
-// 初始化队列
-export async function initializeQueues(): Promise<void> {
-  await rabbitmq.createQueue(QueueNames.ORDER_PROCESSING);
-  await rabbitmq.createQueue(QueueNames.SECKILL_NOTIFICATIONS);
-  await rabbitmq.createQueue(QueueNames.STATS_UPDATE);
-}
+// Export a single instance of the service
+export const rabbitMQService = new RabbitMQService();

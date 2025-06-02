@@ -19,6 +19,7 @@ const DATABASE_URL = process.env.DATABASE_URL;
 const SERVER_PORT_STRING = process.env.SERVER_PORT;
 const RSBUILD_APP_API_URL = process.env.RSBUILD_APP_API_URL; // 前端可能需要的API URL
 const JWT_SECRET = process.env.JWT_SECRET || 'YOUR_DEFAULT_JWT_SECRET_REPLACE_ME'; // JWT密钥，带默认值
+const RABBITMQ_URL = process.env.RABBITMQ_URL || 'amqp://localhost:5672'; // RabbitMQ连接URL，带默认值
 
 // 验证必要的环境变量
 if (!DATABASE_URL) {
@@ -37,17 +38,23 @@ if (isNaN(SERVER_PORT)) {
   process.exit(1);
 }
 
+if (!RABBITMQ_URL) {
+  console.error('[ConfigModule] FATAL: RABBITMQ_URL is not defined in .env.development or environment. Using default value.');
+}
+
 // 导出配置对象
 const config = {
   DATABASE_URL,
   SERVER_PORT,
   RSBUILD_APP_API_URL, // 如果后端也需要知道前端的API基路径
   JWT_SECRET,
+  RABBITMQ_URL,
   // 您可以在此添加其他从环境变量加载的配置
 };
 
 console.log('[ConfigModule] Configuration loaded successfully.');
 console.log(`[ConfigModule] DATABASE_URL: ${config.DATABASE_URL ? 'Loaded' : 'MISSING!'}`);
 console.log(`[ConfigModule] SERVER_PORT: ${config.SERVER_PORT}`);
+console.log(`[ConfigModule] RABBITMQ_URL: ${config.RABBITMQ_URL ? 'Loaded' : 'MISSING (using default)'}`);
 
 export default config;
