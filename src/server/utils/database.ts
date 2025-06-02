@@ -6,9 +6,9 @@ import config from '../config'; // 导入新的配置模块
 // 扩展全局命名空间以包含我们的数据库连接和 MongoDB 驱动实例
 declare global {
   // eslint-disable-next-line no-var
-  var mongo: typeof mongoDriver;
+  var mongo: typeof mongoDriver | undefined;
   // eslint-disable-next-line no-var
-  var db: Db;
+  var db: Db | undefined;
 }
 
 const MONGODB_URI = config.DATABASE_URL; // 从配置模块获取URI
@@ -80,7 +80,20 @@ process.on('SIGTERM', async () => {
   process.exit(0);
 });
 
-// Export global references. Other modules can import these,
-// but must ensure connectToDatabase() is called before use.
-export const mongo = global.mongo;
-export const db = global.db;
+// Getter functions for other modules to reliably access the instances
+export function getDbInstance(): Db {
+  if (!global.db) {
+    // This error indicates a programming error: connectToDatabase() was not called or failed.
+    console.error('[Database] FATAL: getDbInstance called when global.db is not set. Ensure connectToDatabase() was called and succeeded before attempting to get the DB instance.');
+    throw new Error('Database instance (db) is not available. Connection might have failed or was not initiated.');
+  }
+  return global.db;
+}
+
+export function getMongoDriver(): typeof mongoDriver {
+  if (!global.mongo) {
+    console.error('[Database] FATAL: getMongoDriver called when global.mongo is not set. Ensure connectToDatabase() was called and succeeded before attempting to get the MongoDB driver.');
+    throw new Error('MongoDB driver (mongo) is not available. Connection might have failed or was not initiated.');
+  }
+  return global.mongo;
+}
