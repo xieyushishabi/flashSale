@@ -1,4 +1,6 @@
 import { Hono } from 'hono';
+import { SeckillStockManager } from '../utils/redis'; // Import for testing syncStockFromDB
+import logger from '../utils/logger';
 import { connectToDatabase, db, mongo } from '../utils/database'; // Adjust if global.db/mongo is preferred
 import { rabbitmq } from '../utils/rabbitmq'; // Assuming rabbitmq instance is exported
 import { redis } from '../utils/redis'; // Assuming redis instance is exported
@@ -26,6 +28,16 @@ healthRoutes.get('/', async (c) => {
   const rabbitmqStatus = rabbitmq ? 'available' : 'unavailable';
   const redisStatus = redis ? 'available' : 'unavailable';
 
+  let syncedStockFromDB = -1;
+  const testProductId = '683d7a09e7d2f68782eb6bc7'; // Product ID from user logs
+  try {
+    logger.info(`[Health Check] Testing SeckillStockManager.syncStockFromDB for productId: ${testProductId}`);
+    syncedStockFromDB = await SeckillStockManager.syncStockFromDB(testProductId);
+    logger.info(`[Health Check] SeckillStockManager.syncStockFromDB returned: ${syncedStockFromDB} for productId: ${testProductId}`);
+  } catch (error) {
+    logger.error(`[Health Check] Error calling SeckillStockManager.syncStockFromDB for ${testProductId}:`, error);
+  }
+
   return c.json({
     status: 'ok',
     message: '秒购宝电商闪购系统 API is healthy!',
@@ -35,6 +47,11 @@ healthRoutes.get('/', async (c) => {
       rabbitmq: rabbitmqStatus,
       redis: redisStatus,
     },
+    test_syncStockFromDB: {
+      productId: testProductId,
+      stockFromDB_via_sync: syncedStockFromDB,
+      note: 'This is a temporary test for syncStockFromDB.'
+    }
   });
 });
 
