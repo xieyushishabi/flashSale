@@ -290,7 +290,7 @@ export class SeckillStockManager {
         logger.info(`🔒 User ${userId} acquired seckill lock for product ${productId}. Expires in ${lockExpirySeconds}s.`);
         return true;
       } else {
-        logger.warn('⚠️ User %s failed to acquire seckill lock for product %s (lock likely already held or an error occurred). Result: %s', userId, productId, String(result));
+        logger.warn(`⚠️ User ${userId} failed to acquire seckill lock for product ${productId} (lock likely already held or an error occurred). Result: ${String(result)}`);
         return false;
       }
     } catch (err) {
