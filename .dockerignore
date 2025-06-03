@@ -1,0 +1,38 @@
+# Git files
+.git
+.gitignore
+
+# Node.js modules (these will be installed inside the container)
+node_modules
+npm-debug.log
+
+# Docker files themselves
+Dockerfile*
+docker-compose.yml
+nginx.conf
+
+# Environment files (should not be baked into images, use docker-compose env vars instead)
+.env
+.env.*
+!/.env.example # if you have an example env file you want to include
+
+# Build artifacts from local development (if any, that are not part of the container build)
+dist
+dist_server
+coverage
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# IDE and editor directories
+.idea
+.vscode
+*.swp
+
+# Log files
+*.log
+logs/
+
+# Markdown files (if not needed in image)
+*.md

@@ -1,0 +1,28 @@
+# Use an official Node.js runtime as a parent image
+FROM node:20-alpine
+
+# Set the working directory in the container
+WORKDIR /usr/src/app
+
+# Copy package.json and package-lock.json (if available)
+COPY package*.json ./
+
+# Install project dependencies
+# Using --omit=dev to skip development dependencies if not needed for runtime
+# However, since tsx is used directly and is in 'dependencies', a full 'npm install' is safer.
+RUN npm install
+
+# Copy the rest of the application code into the container
+COPY . .
+
+# Make port 8080 available to the world outside this container
+EXPOSE 8080
+
+# Define environment variables (can be overridden in docker-compose)
+ENV NODE_ENV=production
+ENV PORT=8080
+# Add other necessary ENV variables like DATABASE_URL, REDIS_URL, RABBITMQ_URL later in docker-compose.yml
+
+# Command to run the application
+# tsx is in dependencies, so it can be run via npx or directly if PATH is set up by npm install
+CMD ["npx", "tsx", "src/server/index.ts"]

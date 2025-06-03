@@ -1,3 +1,5 @@
+name: miaogou
+
 services:
   mongo1:
     image: mongo:latest
@@ -35,10 +37,75 @@ services:
     command: mongod --replSet rs0 --bind_ip_all
     restart: always
 
+  redis:
+    image: redis:alpine
+    container_name: redis_service
+    ports:
+      - "6379:6379"
+    networks:
+      - mongonet
+    restart: always
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq_service
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq # Persist RabbitMQ data
+    networks:
+      - mongonet
+    restart: always
+
+  app-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: app_backend_service
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=production
+      - PORT=8080
+      - DATABASE_URL=mongodb://mongo1:27017,mongo2:27017,mongo3:27017/miaogou?replicaSet=rs0 # Replace flash_sale_db with your actual DB name
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672 # Use guest:guest or your custom credentials
+      - JWT_SECRET=d15ae1e3a29088dadf1f43d398b7b6ab7f9d1e13eb3146473735593aab5f0157 # !!! CHANGE THIS IN PRODUCTION !!!
+      - API_BASE_URL=/api
+      - ELASTICSEARCH_URL=http://host.docker.internal:9200 # Added Elasticsearch URL
+      # Add any other necessary environment variables for your backend
+    volumes:
+      - .:/usr/src/app # Mount local code for development (optional, remove for pure image-based deployment)
+      - /usr/src/app/node_modules # Anonymous volume to prevent local node_modules from overwriting container's
+    depends_on:
+      - mongo1
+      - mongo2
+      - mongo3
+      - redis
+      - rabbitmq
+    networks:
+      - mongonet
+    restart: always
+
+  app-frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: app_frontend_service
+    ports:
+      - "3000:80" # Map host port 3000 to Nginx container port 80
+    depends_on:
+      - app-backend # Ensures backend is available if frontend proxies to it (though Nginx config doesn't currently)
+    networks:
+      - mongonet
+    restart: always
+
 volumes:
   mongo1_data:
   mongo2_data:
   mongo3_data:
+  rabbitmq_data:
 
 networks:
   mongonet:

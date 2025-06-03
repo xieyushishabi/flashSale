@@ -35,8 +35,12 @@ export async function connectToDatabase() {
 
   try {
     await client.connect();
-    const dbName = new URL(MONGODB_URI).pathname.substring(1) || 'miaogou';
-    const dbInstance = client.db(dbName);
+    // Use the database specified in the connection string's path.
+    // If no database is in the path, client.db() might connect to a default db,
+    // or you might need to pass a default name like client.db('miaogou').
+    // Given your URI has /miaogou, client.db() should work.
+    const dbInstance = client.db();
+    const dbName = dbInstance.databaseName; // Get the actual name from the db instance
     console.log(`[Database] Successfully connected to database: ${dbName}`);
 
     cachedClient = client;
