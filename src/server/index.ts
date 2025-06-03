@@ -46,6 +46,7 @@ import { rabbitMQService } from './utils/rabbitmq'; // 假设这些存在或将�
 // 4. 导入其他服务模块
 
 import { WebSocketService } from './websocket'; // WebSocketService will handle upgrades
+import { getMetrics, metricsMiddleware, getMetricsSummary } from './services/metrics';
 import { SeckillStockManager, redis, redisConnectionPromise } from './utils/redis'; // Import SeckillStockManager class and redis instance
 import type { IncomingMessage, Server as HttpServerType } from 'http'; // For WebSocket upgrade and server type
 import type { Http2Server, Http2SecureServer } from 'http2'; // Import http2 related types
@@ -105,8 +106,9 @@ async function main() {
     // --- 中间件设置 ---
     appLogger.info('[Main] Setting up Hono middleware...');
     app.use('*', logger());
+    app.use('*', metricsMiddleware); // Apply metrics middleware to all routes
     app.use('*', cors({
-      origin: '*', // 根据生产环境需要配置
+      origin: 'http://localhost:3000', // Allow requests from frontend dev server
       allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowHeaders: ['Content-Type', 'Authorization'],
     }));
@@ -119,7 +121,7 @@ async function main() {
     appLogger.info('[Main] Registering API routes...');
     app.route('/api/auth', authRoutes);
     app.route('/api/products', productsRoutes);
-  app.route('/api/seckill', seckillRoutes);
+    app.route('/api/seckill', seckillRoutes);
 
     // 安全路由组，需要JWT认证
     const secureRoutes = new Hono();
@@ -365,13 +367,22 @@ async function main() {
     });
     appLogger.info('[Main] RabbitMQ consumers set up.');
 
+    // --- Health and Metrics Endpoints ---
+    appLogger.info('[Main] Registering /health and /metrics routes...');
+    app.get('/health', (c) => {
+      appLogger.debug('[HealthCheck] /health endpoint was called');
+      // TODO: Add more comprehensive health checks (DB, Redis, RabbitMQ)
+      return c.json({ status: 'UP', timestamp: new Date().toISOString() });
+    });
+    app.get('/metrics', getMetrics);
+app.get('/api/metrics/summary', getMetricsSummary); // New endpoint for JSON metrics
+    appLogger.info('[Main] /health and /metrics routes registered.');
+
     // --- 全局错误处理程序 ---
     app.onError((err, c) => {
       appLogger.error('[Main] Hono global error:', err);
       // 如果需要，记录更详细的错误以进行调试
       // appLogger.error(err.stack);
-      // 如果需要，记录更详细的错误以进行调试
-      // logger.error(err.stack);
       return c.json({ error: 'Internal Server Error', message: err.message }, 500);
     });
 

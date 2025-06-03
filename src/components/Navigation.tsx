@@ -6,7 +6,7 @@
 
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Home, BarChart3, ShoppingBag, User, LogOut, LogIn, Zap, ListChecks } from 'lucide-react'; // Added ListChecks
+import { Home, BarChart3, ShoppingBag, User, LogOut, LogIn, Zap, ListChecks, Activity } from 'lucide-react'; // Added ListChecks, Activity
 import { useAuth } from '../hooks/useAuth';
 
 export function Navigation() {
@@ -46,6 +46,13 @@ export function Navigation() {
                 >
                   <ListChecks className="w-4 h-4" /> 
                   <span>系统日志</span>
+                </Link>
+                <Link
+                  to="/monitoring"
+                  className="flex items-center space-x-1 px-3 py-2 rounded-lg text-gray-700 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                >
+                  <Activity className="w-4 h-4" />
+                  <span>应用监控</span>
                 </Link>
                 <Link
                   to="/orders"
